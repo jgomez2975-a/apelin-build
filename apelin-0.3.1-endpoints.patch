@@ -640,10 +640,10 @@ index dd8ceed..464b995 100644
          }
 diff --git a/Apelin/Interface/Settings/Accounts/EndpointFormController.swift b/Apelin/Interface/Settings/Accounts/EndpointFormController.swift
 new file mode 100644
-index 0000000..1e0366d
+index 0000000..bdd780c
 --- /dev/null
 +++ b/Apelin/Interface/Settings/Accounts/EndpointFormController.swift
-@@ -0,0 +1,305 @@
+@@ -0,0 +1,309 @@
 +import ApelinProtocol
 +import UIKit
 +
@@ -887,9 +887,13 @@ index 0000000..1e0366d
 +                    list = try await EndpointModelProbe.models(address: address, apiKey: key)
 +                }
 +                fields[.models]?.text = list.joined(separator: ", ")
++                // Naming the host answers the question a list of odd-looking
++                // models raises: this is what that site serves, not what some
++                // other account left behind.
++                let host = URLComponents(string: address)?.host ?? address
 +                presentNotice(
 +                    title: "Models Found",
-+                    message: String(localized: "\(list.count) models are in the list now. Save to keep them."),
++                    message: String(localized: "\(list.count) models from \(host) are in the list now. Save to keep them."),
 +                )
 +            } catch {
 +                presentNotice(title: "Unable to Fetch Models", message: error.readableMessage)
@@ -951,11 +955,11 @@ index 0000000..1e0366d
 +}
 diff --git a/Apelin/Interface/Settings/Accounts/EndpointModelProbe.swift b/Apelin/Interface/Settings/Accounts/EndpointModelProbe.swift
 new file mode 100644
-index 0000000..dd834c5
+index 0000000..a57dd18
 --- /dev/null
 +++ b/Apelin/Interface/Settings/Accounts/EndpointModelProbe.swift
-@@ -0,0 +1,74 @@
-+import ApelinCore
+@@ -0,0 +1,78 @@
++import ApelinProtocol
 +import Foundation
 +
 +/// Reads the model list of an endpoint the form is still holding.
@@ -1019,7 +1023,11 @@ index 0000000..dd834c5
 +        let ids = listed.compactMap { ($0["id"] ?? $0["name"]) as? String }
 +            .map { $0.hasPrefix("models/") ? String($0.dropFirst(7)) : $0 }
 +            .filter { !$0.isEmpty && $0.count <= 256 }
-+        let unique = Array(Set(ids)).sorted()
++        // The site's own order, kept: a panel groups its list by what it
++        // sells, so the models of the thing the reader came for sit
++        // together instead of being scattered by the alphabet.
++        var seen = Set<String>()
++        let unique = ids.filter { seen.insert($0).inserted }
 +        guard !unique.isEmpty else {
 +            throw ApelinError(
 +                .unavailable,
@@ -1356,7 +1364,7 @@ index c27e079..5740beb 100644
          if case .version = dataSource.value(at: indexPath)?.row {
              return false
 diff --git a/Apelin/Resources/Localizable.xcstrings b/Apelin/Resources/Localizable.xcstrings
-index 006a2f9..aa65416 100644
+index 006a2f9..a73d8a7 100644
 --- a/Apelin/Resources/Localizable.xcstrings
 +++ b/Apelin/Resources/Localizable.xcstrings
 @@ -76340,6 +76340,1755 @@
@@ -2621,88 +2629,6 @@ index 006a2f9..aa65416 100644
 +        }
 +      }
 +    },
-+    "%lld models are in the list now. Save to keep them." : {
-+      "localizations" : {
-+        "ar" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "يوجد الآن %lld نموذجًا في القائمة. احفظ للإبقاء عليها."
-+          }
-+        },
-+        "de" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%lld Modelle stehen jetzt in der Liste. Speichere, um sie zu behalten."
-+          }
-+        },
-+        "en" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%lld models are in the list now. Save to keep them."
-+          }
-+        },
-+        "es" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "Ahora hay %lld modelos en la lista. Guarda para conservarlos."
-+          }
-+        },
-+        "fr" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%lld modèles figurent maintenant dans la liste. Enregistrez pour les conserver."
-+          }
-+        },
-+        "it" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "Ora ci sono %lld modelli nell’elenco. Salva per mantenerli."
-+          }
-+        },
-+        "ja" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%lld 個のモデルが一覧にあります。保存すると保持されます。"
-+          }
-+        },
-+        "ko" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "이제 목록에 %lld개의 모델이 있습니다. 저장하면 유지됩니다."
-+          }
-+        },
-+        "pt-BR" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "Agora há %lld modelos na lista. Salve para mantê-los."
-+          }
-+        },
-+        "ru" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "В списке теперь %lld моделей. Сохраните, чтобы оставить их."
-+          }
-+        },
-+        "vi" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "Hiện có %lld mô hình trong danh sách. Lưu để giữ lại."
-+          }
-+        },
-+        "zh-Hans" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "已把 %lld 个模型放进列表，保存后生效。"
-+          }
-+        },
-+        "zh-Hant" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "已把 %lld 個模型放進列表，儲存後生效。"
-+          }
-+        }
-+      }
-+    },
 +    "Enter a valid HTTP or HTTPS address." : {
 +      "localizations" : {
 +        "ar" : {
@@ -3109,6 +3035,88 @@ index 006a2f9..aa65416 100644
 +          "stringUnit" : {
 +            "state" : "translated",
 +            "value" : "這個端點沒有列出任何模型。手動加一個，或確認位址是否正確。"
++          }
++        }
++      }
++    },
++    "%lld models from %@ are in the list now. Save to keep them." : {
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "يوجد الآن %lld نموذجًا من %@ في القائمة. احفظ للإبقاء عليها."
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%lld Modelle von %@ stehen jetzt in der Liste. Speichere, um sie zu behalten."
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%lld models from %@ are in the list now. Save to keep them."
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Ahora hay %lld modelos de %@ en la lista. Guarda para conservarlos."
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%lld modèles de %@ figurent maintenant dans la liste. Enregistrez pour les conserver."
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Ora ci sono %lld modelli da %@ nell’elenco. Salva per mantenerli."
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%@ から %lld 個のモデルを一覧に入れました。保存すると保持されます。"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%@에서 모델 %lld개를 목록에 넣었습니다. 저장하면 유지됩니다."
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Agora há %lld modelos de %@ na lista. Salve para mantê-los."
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "В списке теперь %lld моделей от %@. Сохраните, чтобы оставить их."
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Hiện có %lld mô hình từ %@ trong danh sách. Lưu để giữ lại."
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "已把 %@ 的 %lld 个模型放进列表，保存后生效。"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "已把 %@ 的 %lld 個模型放進列表，儲存後生效。"
 +          }
 +        }
 +      }
