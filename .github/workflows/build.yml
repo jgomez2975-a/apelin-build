@@ -56,8 +56,14 @@ jobs:
           mkdir -p src
           tar xzf apelin.tar.gz -C src --strip-components=1
           cd src
+          # The tree needs a HEAD: the agent-tools step counts commits to name
+          # its source archive, and `git rev-parse HEAD` fails on a bare
+          # `git init`. One commit of the patched tree is what it wants.
           git init -q .
           git apply --verbose ../apelin-0.3.1-endpoints.patch
+          git add -A
+          git -c user.name="apelin-build" -c user.email="apelin-build@users.noreply.github.com" \
+            commit -qm "Apelin 0.3.1 with the skin and the multiple-endpoint settings"
 
       - name: Build, package and verify the IDE and every extension
         shell: bash
