@@ -33,6 +33,7 @@ jobs:
           latest="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
           sudo xcode-select -s "$latest/Contents/Developer"
           xcodebuild -version
+          echo "IPHONEOS SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
 
       - name: Install packaging dependencies
         shell: bash
@@ -63,8 +64,14 @@ jobs:
         run: |
           set -euo pipefail
           cd src
+          # The project asks for the iOS 27.1 SDK; no hosted runner has an
+          # Xcode that new yet, so build against the SDK that is here and say
+          # so. The SDK picks the layout tier an iPhone Duo gives the app —
+          # 26 and older centres it — and everything else is unchanged.
+          sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "building against the iPhoneOS $sdk SDK"
           make deb-all CONFIGURATION=Release SKIP_HARNESS=1 \
-            BUILD_NUMBER="$GITHUB_RUN_NUMBER"
+            BUILD_NUMBER="$GITHUB_RUN_NUMBER" IOS_SDK_TIER="$sdk"
 
       - name: Collect packages
         if: always()

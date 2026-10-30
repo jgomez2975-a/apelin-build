@@ -1,100 +1,3 @@
-diff --git a/.github/workflows/build-minis-skin.yml b/.github/workflows/build-minis-skin.yml
-new file mode 100644
-index 0000000..28f8318
---- /dev/null
-+++ b/.github/workflows/build-minis-skin.yml
-@@ -0,0 +1,91 @@
-+# Builds the Minis-skinned Apelin into installable .deb packages on GitHub's
-+# macOS runners — the same steps as ci.yml's build job, kept apart so the skin
-+# can be packaged on its own without waiting for main's gates.
-+#
-+# Nothing is published: the packages land in the run's artifacts.
-+name: Build Minis skin
-+
-+on:
-+  workflow_dispatch:
-+  push:
-+    branches:
-+      - main
-+      - skin/minis
-+
-+permissions:
-+  contents: read
-+
-+env:
-+  HOMEBREW_NO_AUTO_UPDATE: "1"
-+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
-+  HOMEBREW_NO_ANALYTICS: "1"
-+
-+jobs:
-+  package:
-+    name: Package both flavours
-+    runs-on: macos-26
-+    timeout-minutes: 90
-+
-+    steps:
-+      - name: Configure build paths
-+        shell: bash
-+        run: |
-+          set -euo pipefail
-+          echo "DERIVED_DATA=$RUNNER_TEMP/apelin-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
-+
-+      - name: Check out repository
-+        uses: actions/checkout@v4
-+        with:
-+          persist-credentials: false
-+
-+      - name: Select newest Xcode
-+        run: |
-+          latest="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print | sort -V | tail -n1)"
-+          sudo xcode-select -s "$latest/Contents/Developer"
-+          xcodebuild -version
-+
-+      - name: Install packaging dependencies
-+        shell: bash
-+        run: |
-+          set -euo pipefail
-+          formulae=()
-+          command -v dpkg-deb >/dev/null 2>&1 || formulae+=(dpkg)
-+          command -v ldid >/dev/null 2>&1 || formulae+=(ldid)
-+          command -v zstd >/dev/null 2>&1 || formulae+=(zstd)
-+          if (( ${#formulae[@]} > 0 )); then
-+            brew install "${formulae[@]}"
-+          fi
-+
-+      # The skin's own new file is picked up by the project's synchronized
-+      # folders, so nothing here names MinisSkin.swift.
-+      - name: Build, package and verify the IDE and every extension
-+        run: make deb-all CONFIGURATION=Release SKIP_HARNESS=1 DERIVED_DATA="$DERIVED_DATA" BUILD_NUMBER="$GITHUB_RUN_NUMBER"
-+
-+      - name: Archive dSYMs
-+        shell: bash
-+        run: |
-+          set -euo pipefail
-+          version="$(make --no-print-directory print-version)"
-+          cd "$DERIVED_DATA/Build/Products/Release-iphoneos"
-+          zip -qry "$GITHUB_WORKSPACE/build/Packages/Apelin_${version}_dSYMs.zip" ./*.dSYM
-+
-+      - name: Write checksums
-+        shell: bash
-+        run: |
-+          set -euo pipefail
-+          cd build/Packages
-+          shasum -a 256 ./*.deb ./*_source.tar.xz ./*_Templates.tar.zst ./*_dSYMs.zip > SHA256SUMS
-+          cat SHA256SUMS
-+
-+      - name: Upload Debian packages
-+        uses: actions/upload-artifact@v4
-+        with:
-+          name: apelin-minis-${{ github.sha }}
-+          path: |
-+            build/Packages/*.deb
-+            build/Packages/*_source.tar.xz
-+            build/Packages/*_Templates.tar.zst
-+            build/Packages/*_dSYMs.zip
-+            build/Packages/SHA256SUMS
-+          if-no-files-found: error
-+          retention-days: 30
 diff --git a/Apelin/Interface/Chats/ChatController.swift b/Apelin/Interface/Chats/ChatController.swift
 index ae7fa9b..6625f09 100644
 --- a/Apelin/Interface/Chats/ChatController.swift
@@ -945,482 +848,59 @@ index 167681c..ddce514 100644
      }
  }
 diff --git a/Apelin/Interface/Settings/Accounts/ModelProvidersController.swift b/Apelin/Interface/Settings/Accounts/ModelProvidersController.swift
-index 8af8560..0bcdeaa 100644
+index 8af8560..d9d725f 100644
 --- a/Apelin/Interface/Settings/Accounts/ModelProvidersController.swift
 +++ b/Apelin/Interface/Settings/Accounts/ModelProvidersController.swift
-@@ -1,318 +1,401 @@
--import ApelinProtocol
--import Then
--import UIKit
--
--/// Settings ▸ Model Providers: every provider apelin-agent can sign in to,
--/// in Apelin's display order. Signed-in ones first, each with who
--/// it is signed in as under its name and a `…` menu (Edit Configuration or Sign In Again, Sign
--/// Out); then the rest, those signed in to with an account apart from those
--/// that take a typed key. A search field narrows the list by name.
--final class ModelProvidersController: TableController, UISearchResultsUpdating {
--    private enum Group: Hashable {
--        case signedIn
--        case accounts
--        case keys
--
--        var title: String {
--            switch self {
--            case .signedIn: String(localized: "Signed In")
--            case .accounts: String(localized: "Sign In with an Account")
--            case .keys: String(localized: "API Keys")
--            }
--        }
--    }
--
--    private enum Status: Equatable {
--        case loading
--        case unavailable(String)
--        case noResults
--    }
--
--    private enum Section: Hashable {
--        case group(Group)
--        case status
--    }
--
--    private enum Row: Equatable {
--        case account(AgentAccount)
--        case status(Status)
--        var id: String {
--            switch self {
+@@ -9,12 +9,14 @@ import UIKit
+ /// that take a typed key. A search field narrows the list by name.
+ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+     private enum Group: Hashable {
++        case endpoints
+         case signedIn
+         case accounts
+         case keys
+ 
+         var title: String {
+             switch self {
++            case .endpoints: String(localized: "Custom Endpoints")
+             case .signedIn: String(localized: "Signed In")
+             case .accounts: String(localized: "Sign In with an Account")
+             case .keys: String(localized: "API Keys")
+@@ -35,10 +37,12 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+ 
+     private enum Row: Equatable {
+         case account(AgentAccount)
++        case addEndpoint
+         case status(Status)
+         var id: String {
+             switch self {
 -            case let .account(account): account.provider.rawValue
--            case .status: "status"
--            }
--        }
--    }
--
--    private lazy var dataSource = TableDataSource<Section, String, Row>(
--        tableView: tableView,
--        identifier: { $0.id },
--    ) { [weak self] _, _, row in
--        guard let self else { return nil }
--        switch row {
--        case let .account(account): return accountCell(account)
--        case let .status(status): return statusCell(status)
--        }
--    }
--
--    /// The accounts as apelin-agent last listed them.
--    private var accounts: [AgentAccount] = []
--    private var loaded = false
--    private var failure: Error?
--    private var query = ""
--    private var sections: [(Section, [Row])] = [(.status, [.status(.loading)])]
--    private var loader: Task<Void, Never>?
--    private let search = UISearchController(searchResultsController: nil)
--
--    init() {
--        super.init(style: .insetGrouped)
--    }
--
--    @available(*, unavailable)
--    required init?(coder _: NSCoder) {
--        fatalError("init(coder:) is not used")
--    }
--
--    deinit {
--        loader?.cancel()
--    }
--
--    override func viewDidLoad() {
--        super.viewDidLoad()
--        title = String(localized: "Model Providers")
--        navigationItem.backButtonDisplayMode = .minimal
--        search.searchResultsUpdater = self
--        search.obscuresBackgroundDuringPresentation = false
--        search.searchBar.placeholder = String(localized: "Search")
--        search.searchBar.autocapitalizationType = .none
--        navigationItem.searchController = search
--        navigationItem.hidesSearchBarWhenScrolling = false
--        definesPresentationContext = true
--        dataSource.headerTitle = { section in
--            if case let .group(group) = section {
--                return group.title
--            }
--            return nil
--        }
--        dataSource.footerTitle = { [weak self] section in
--            guard let self, section == sections.last?.0, case .group = section else { return nil }
--            return String(localized: "Credentials stay in this device’s keychain.")
--        }
--        dataSource.update(sections)
--    }
--
--    override func viewWillAppear(_ animated: Bool) {
--        super.viewWillAppear(animated)
--        load()
--    }
--
--    private func load() {
--        loader?.cancel()
--        dataSource.beginLoad()
--        loader = Task { [weak self] in
--            do {
--                let list = try await ApelinService.app.agentAccountList()
--                guard !Task.isCancelled, let self else { return }
--                accounts = list.accounts
--                failure = nil
--            } catch {
--                guard !Task.isCancelled, let self else { return }
--                failure = error
--            }
--            guard let self else { return }
--            loaded = true
--            regroup()
--        }
--    }
--
--    func updateSearchResults(for searchController: UISearchController) {
--        let text = (searchController.searchBar.text ?? "").trimmingCharacters(in: .whitespaces)
--        guard text != query else { return }
--        query = text
--        regroup()
--    }
--
--    private func regroup() {
--        if !loaded {
--            sections = [(.status, [.status(.loading)])]
--        } else if let failure, accounts.isEmpty {
--            sections = [(.status, [.status(.unavailable(ProviderLoginController.unavailableText(failure)))])]
--        } else {
--            let shown = query.isEmpty
--                ? accounts
--                : accounts.filter { $0.provider.displayName.localizedStandardContains(query) }
--            let groups: [(Group, [AgentAccount])] = [
++            case let .account(account): "account:\(account.id ?? account.provider.rawValue)"
++            case .addEndpoint: "addEndpoint"
+             case .status: "status"
+             }
+         }
+@@ -51,6 +55,7 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+         guard let self else { return nil }
+         switch row {
+         case let .account(account): return accountCell(account)
++        case .addEndpoint: return addEndpointCell()
+         case let .status(status): return statusCell(status)
+         }
+     }
+@@ -142,14 +147,20 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+                 ? accounts
+                 : accounts.filter { $0.provider.displayName.localizedStandardContains(query) }
+             let groups: [(Group, [AgentAccount])] = [
 -                (.signedIn, shown.filter(\.signedIn)),
--                (.accounts, shown.filter { !$0.signedIn && $0.method != .apiKey }),
--                (.keys, shown.filter { !$0.signedIn && $0.method == .apiKey }),
--            ]
++                (.endpoints, shown.filter { $0.id != nil }),
++                (.signedIn, shown.filter { $0.signedIn && $0.id == nil }),
+                 (.accounts, shown.filter { !$0.signedIn && $0.method != .apiKey }),
+                 (.keys, shown.filter { !$0.signedIn && $0.method == .apiKey }),
+             ]
 -            sections = groups.filter { !$0.1.isEmpty }.map { (.group($0.0), $0.1.map(Row.account)) }
 -            if sections.isEmpty {
 -                sections = [(.status, [.status(.noResults)])]
--            }
--        }
--        dataSource.update(sections)
--    }
--
--    // MARK: - Table
--
--    private func account(at indexPath: IndexPath) -> AgentAccount? {
--        guard case let .account(account)? = dataSource.value(at: indexPath) else { return nil }
--        return account
--    }
--
--    private func statusCell(_ status: Status) -> UITableViewCell {
--        switch status {
--        case .loading:
--            return WaitingCell().then { $0.show(String(localized: "Loading…")) }
--        case let .unavailable(message):
--            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
--            var content = UIListContentConfiguration.stackedValueCell()
--            content.text = String(localized: "Model Providers Unavailable")
--            content.secondaryText = message
--            content.secondaryTextProperties.color = .secondaryLabel
--
--            cell.contentConfiguration = content
--            cell.selectionStyle = .none
--            return cell
--        case .noResults:
--            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
--            var content = UIListContentConfiguration.cell()
--            content.text = String(localized: "No Results")
--            content.textProperties.color = .secondaryLabel
--            content.textProperties.alignment = .center
--            cell.contentConfiguration = content
--            cell.selectionStyle = .none
--            return cell
--        }
--    }
--
--    /// The provider's mark and name on one line; signed in, who as under the
--    /// name and a `…` menu at the end.
--    private func accountCell(_ account: AgentAccount) -> UITableViewCell {
--        let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
--        var content: UIListContentConfiguration
--        if account.signedIn {
--            content = .stackedValueCell()
--            content.secondaryText = Self.signedInLine(account)
--            content.secondaryTextProperties.color = .secondaryLabel
--            content.secondaryTextProperties.numberOfLines = 1
--
--            cell.accessoryView = menuButton(account)
--            cell.selectionStyle = .none
--        } else {
--            content = .cell()
--            cell.accessoryType = .disclosureIndicator
--        }
--        content.text = account.provider.displayName
--        content.textProperties.numberOfLines = 1
--        content.image = account.provider.icon
--        content.imageProperties.maximumSize = CGSize(width: 29, height: 29)
--        content.imageProperties.reservedLayoutSize = CGSize(width: 29, height: 29)
--        cell.contentConfiguration = content
--        return cell
--    }
--
--    private static func signedInLine(_ account: AgentAccount) -> String {
--        var parts = [account.account ?? String(localized: "Signed In")]
--        if let expiresAt = account.expiresAt {
--            let date = expiresAt.formatted(date: .abbreviated, time: .shortened)
--            parts.append(expiresAt < Date() ? String(localized: "Expired \(date)") : String(localized: "Until \(date)"))
--        }
--        return parts.joined(separator: " · ")
--    }
--
--    /// `…` with no circle, its menu read each time it opens.
--    private func menuButton(_ account: AgentAccount) -> UIButton {
--        let button = UIButton(type: .system)
--        button.setImage(UIImage(systemName: "ellipsis"), for: .normal)
--        button.showsMenuAsPrimaryAction = true
--        button.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
--            completion(self?.accountActions(account) ?? [])
--        }])
--        button.frame = CGRect(x: 0, y: 0, width: 32, height: 44)
--        button.accessibilityLabel = String(localized: "\(account.provider.displayName) Options")
--        return button
--    }
--
--    private func accountActions(_ account: AgentAccount) -> [UIMenuElement] {
--        [
--            UIAction(
--                title: String(localized: "Edit"),
--                image: UIImage(systemName: account.isAPIKeyAccount ? "pencil" : "arrow.clockwise"),
--            ) { [weak self] _ in
--                self?.signIn(account)
--            },
--            UIAction(
--                title: String(localized: "Models"),
--                image: UIImage(systemName: "checklist"),
--            ) { [weak self] _ in
--                self?.presentPageAsFormSheet(ModelActivationController(account: account))
--            },
--            UIMenu(options: .displayInline, children: [
--                UIAction(
--                    title: String(localized: "Sign Out"),
--                    image: UIImage(systemName: "rectangle.portrait.and.arrow.right"),
--                    attributes: .destructive,
--                ) { [weak self] _ in
--                    self?.confirmSignOut(account.provider)
--                },
--            ]),
--        ]
--    }
--
--    override func tableView(_: UITableView, shouldHighlightRowAt indexPath: IndexPath) -> Bool {
--        account(at: indexPath).map { !$0.signedIn } ?? false
--    }
--
--    override func tableView(
--        _: UITableView,
--        contextMenuConfigurationForRowAt indexPath: IndexPath,
--        point _: CGPoint,
--    ) -> UIContextMenuConfiguration? {
--        guard let account = account(at: indexPath), account.signedIn else { return nil }
--        return UIContextMenuConfiguration(actionProvider: { [weak self] _ in
--            UIMenu(children: self?.accountActions(account) ?? [])
--        })
--    }
--
--    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
--        tableView.deselectRow(at: indexPath, animated: true)
--        guard let account = account(at: indexPath), !account.signedIn else { return }
--        signIn(account)
--    }
--
--    // MARK: - Acting
--
--    private func signIn(_ account: AgentAccount) {
--        let page = ProviderLoginController(account: account)
--        page.onFinish = { [weak self] in self?.load() }
--        // a sheet of its own over Settings, kept up until it is closed: a
--        // stray swipe would end a sign-in waiting on Safari
--        page.isModalInPresentation = true
--        presentPageAsFormSheet(page)
--    }
--
--    private func confirmSignOut(_ provider: AgentProvider) {
--        presentConfirmation(
--            title: "Sign Out of \(provider.displayName)?",
--            message: "Agent sessions that use it stop working until you sign in again.",
--            confirmTitle: "Sign Out",
--            destructive: true,
--        ) { [weak self] in
--            self?.signOut(provider)
--        }
--    }
--
--    private func signOut(_ provider: AgentProvider) {
--        Task { [weak self] in
--            do {
--                try await ApelinService.app.agentSignOut(provider: provider)
--                EnabledModels.remove(for: provider)
--                self?.load()
--            } catch {
--                self?.presentNotice(title: "Unable to Sign Out", message: error.readableMessage)
--            }
--        }
--    }
--}
-+import ApelinProtocol
-+import Then
-+import UIKit
-+
-+/// Settings ▸ Model Providers: every provider apelin-agent can sign in to,
-+/// in Apelin's display order. Signed-in ones first, each with who
-+/// it is signed in as under its name and a `…` menu (Edit Configuration or Sign In Again, Sign
-+/// Out); then the rest, those signed in to with an account apart from those
-+/// that take a typed key. A search field narrows the list by name.
-+final class ModelProvidersController: TableController, UISearchResultsUpdating {
-+    private enum Group: Hashable {
-+        case endpoints
-+        case signedIn
-+        case accounts
-+        case keys
-+
-+        var title: String {
-+            switch self {
-+            case .endpoints: String(localized: "Custom Endpoints")
-+            case .signedIn: String(localized: "Signed In")
-+            case .accounts: String(localized: "Sign In with an Account")
-+            case .keys: String(localized: "API Keys")
-+            }
-+        }
-+    }
-+
-+    private enum Status: Equatable {
-+        case loading
-+        case unavailable(String)
-+        case noResults
-+    }
-+
-+    private enum Section: Hashable {
-+        case group(Group)
-+        case status
-+    }
-+
-+    private enum Row: Equatable {
-+        case account(AgentAccount)
-+        case addEndpoint
-+        case status(Status)
-+        var id: String {
-+            switch self {
-+            case let .account(account): "account:\(account.id ?? account.provider.rawValue)"
-+            case .addEndpoint: "addEndpoint"
-+            case .status: "status"
-+            }
-+        }
-+    }
-+
-+    private lazy var dataSource = TableDataSource<Section, String, Row>(
-+        tableView: tableView,
-+        identifier: { $0.id },
-+    ) { [weak self] _, _, row in
-+        guard let self else { return nil }
-+        switch row {
-+        case let .account(account): return accountCell(account)
-+        case .addEndpoint: return addEndpointCell()
-+        case let .status(status): return statusCell(status)
-+        }
-+    }
-+
-+    /// The accounts as apelin-agent last listed them.
-+    private var accounts: [AgentAccount] = []
-+    private var loaded = false
-+    private var failure: Error?
-+    private var query = ""
-+    private var sections: [(Section, [Row])] = [(.status, [.status(.loading)])]
-+    private var loader: Task<Void, Never>?
-+    private let search = UISearchController(searchResultsController: nil)
-+
-+    init() {
-+        super.init(style: .insetGrouped)
-+    }
-+
-+    @available(*, unavailable)
-+    required init?(coder _: NSCoder) {
-+        fatalError("init(coder:) is not used")
-+    }
-+
-+    deinit {
-+        loader?.cancel()
-+    }
-+
-+    override func viewDidLoad() {
-+        super.viewDidLoad()
-+        title = String(localized: "Model Providers")
-+        navigationItem.backButtonDisplayMode = .minimal
-+        search.searchResultsUpdater = self
-+        search.obscuresBackgroundDuringPresentation = false
-+        search.searchBar.placeholder = String(localized: "Search")
-+        search.searchBar.autocapitalizationType = .none
-+        navigationItem.searchController = search
-+        navigationItem.hidesSearchBarWhenScrolling = false
-+        definesPresentationContext = true
-+        dataSource.headerTitle = { section in
-+            if case let .group(group) = section {
-+                return group.title
-+            }
-+            return nil
-+        }
-+        dataSource.footerTitle = { [weak self] section in
-+            guard let self, section == sections.last?.0, case .group = section else { return nil }
-+            return String(localized: "Credentials stay in this device’s keychain.")
-+        }
-+        dataSource.update(sections)
-+    }
-+
-+    override func viewWillAppear(_ animated: Bool) {
-+        super.viewWillAppear(animated)
-+        load()
-+    }
-+
-+    private func load() {
-+        loader?.cancel()
-+        dataSource.beginLoad()
-+        loader = Task { [weak self] in
-+            do {
-+                let list = try await ApelinService.app.agentAccountList()
-+                guard !Task.isCancelled, let self else { return }
-+                accounts = list.accounts
-+                failure = nil
-+            } catch {
-+                guard !Task.isCancelled, let self else { return }
-+                failure = error
-+            }
-+            guard let self else { return }
-+            loaded = true
-+            regroup()
-+        }
-+    }
-+
-+    func updateSearchResults(for searchController: UISearchController) {
-+        let text = (searchController.searchBar.text ?? "").trimmingCharacters(in: .whitespaces)
-+        guard text != query else { return }
-+        query = text
-+        regroup()
-+    }
-+
-+    private func regroup() {
-+        if !loaded {
-+            sections = [(.status, [.status(.loading)])]
-+        } else if let failure, accounts.isEmpty {
-+            sections = [(.status, [.status(.unavailable(ProviderLoginController.unavailableText(failure)))])]
-+        } else {
-+            let shown = query.isEmpty
-+                ? accounts
-+                : accounts.filter { $0.provider.displayName.localizedStandardContains(query) }
-+            let groups: [(Group, [AgentAccount])] = [
-+                (.endpoints, shown.filter { $0.id != nil }),
-+                (.signedIn, shown.filter { $0.signedIn && $0.id == nil }),
-+                (.accounts, shown.filter { !$0.signedIn && $0.method != .apiKey }),
-+                (.keys, shown.filter { !$0.signedIn && $0.method == .apiKey }),
-+            ]
 +            var built = groups.filter { !$0.1.isEmpty }.map { (Section.group($0.0), $0.1.map(Row.account)) }
 +            if query.isEmpty {
 +                if let index = built.firstIndex(where: { $0.0 == .group(.endpoints) }) {
@@ -1428,71 +908,24 @@ index 8af8560..0bcdeaa 100644
 +                } else {
 +                    built.insert((.group(.endpoints), [.addEndpoint]), at: 0)
 +                }
-+            }
+             }
 +            sections = built.isEmpty ? [(.status, [.status(.noResults)])] : built
-+        }
-+        dataSource.update(sections)
-+    }
-+
-+    // MARK: - Table
-+
-+    private func account(at indexPath: IndexPath) -> AgentAccount? {
-+        guard case let .account(account)? = dataSource.value(at: indexPath) else { return nil }
-+        return account
-+    }
-+
-+    private func statusCell(_ status: Status) -> UITableViewCell {
-+        switch status {
-+        case .loading:
-+            return WaitingCell().then { $0.show(String(localized: "Loading…")) }
-+        case let .unavailable(message):
-+            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-+            var content = UIListContentConfiguration.stackedValueCell()
-+            content.text = String(localized: "Model Providers Unavailable")
-+            content.secondaryText = message
-+            content.secondaryTextProperties.color = .secondaryLabel
-+
-+            cell.contentConfiguration = content
-+            cell.selectionStyle = .none
-+            return cell
-+        case .noResults:
-+            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-+            var content = UIListContentConfiguration.cell()
-+            content.text = String(localized: "No Results")
-+            content.textProperties.color = .secondaryLabel
-+            content.textProperties.alignment = .center
-+            cell.contentConfiguration = content
-+            cell.selectionStyle = .none
-+            return cell
-+        }
-+    }
-+
-+    /// The provider's mark and name on one line; signed in, who as under the
-+    /// name and a `…` menu at the end.
-+    private func accountCell(_ account: AgentAccount) -> UITableViewCell {
-+        let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-+        var content: UIListContentConfiguration
-+        if account.signedIn {
-+            content = .stackedValueCell()
-+            content.secondaryText = Self.signedInLine(account)
-+            content.secondaryTextProperties.color = .secondaryLabel
-+            content.secondaryTextProperties.numberOfLines = 1
-+
-+            cell.accessoryView = menuButton(account)
-+            cell.selectionStyle = .none
-+        } else {
-+            content = .cell()
-+            cell.accessoryType = .disclosureIndicator
-+        }
+         }
+         dataSource.update(sections)
+     }
+@@ -204,7 +215,7 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+             content = .cell()
+             cell.accessoryType = .disclosureIndicator
+         }
+-        content.text = account.provider.displayName
 +        content.text = account.title ?? account.provider.displayName
-+        content.textProperties.numberOfLines = 1
-+        content.image = account.provider.icon
-+        content.imageProperties.maximumSize = CGSize(width: 29, height: 29)
-+        content.imageProperties.reservedLayoutSize = CGSize(width: 29, height: 29)
-+        cell.contentConfiguration = content
-+        return cell
-+    }
-+
+         content.textProperties.numberOfLines = 1
+         content.image = account.provider.icon
+         content.imageProperties.maximumSize = CGSize(width: 29, height: 29)
+@@ -213,6 +224,19 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+         return cell
+     }
+ 
 +    /// The row that adds another endpoint: a reader keeps as many as they
 +    /// like, and every one of them is an OpenAI-compatible address.
 +    private func addEndpointCell() -> UITableViewCell {
@@ -1506,29 +939,14 @@ index 8af8560..0bcdeaa 100644
 +        return cell
 +    }
 +
-+    private static func signedInLine(_ account: AgentAccount) -> String {
-+        var parts = [account.account ?? String(localized: "Signed In")]
-+        if let expiresAt = account.expiresAt {
-+            let date = expiresAt.formatted(date: .abbreviated, time: .shortened)
-+            parts.append(expiresAt < Date() ? String(localized: "Expired \(date)") : String(localized: "Until \(date)"))
-+        }
-+        return parts.joined(separator: " · ")
-+    }
-+
-+    /// `…` with no circle, its menu read each time it opens.
-+    private func menuButton(_ account: AgentAccount) -> UIButton {
-+        let button = UIButton(type: .system)
-+        button.setImage(UIImage(systemName: "ellipsis"), for: .normal)
-+        button.showsMenuAsPrimaryAction = true
-+        button.menu = UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
-+            completion(self?.accountActions(account) ?? [])
-+        }])
-+        button.frame = CGRect(x: 0, y: 0, width: 32, height: 44)
-+        button.accessibilityLabel = String(localized: "\(account.provider.displayName) Options")
-+        return button
-+    }
-+
-+    private func accountActions(_ account: AgentAccount) -> [UIMenuElement] {
+     private static func signedInLine(_ account: AgentAccount) -> String {
+         var parts = [account.account ?? String(localized: "Signed In")]
+         if let expiresAt = account.expiresAt {
+@@ -236,7 +260,32 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+     }
+ 
+     private func accountActions(_ account: AgentAccount) -> [UIMenuElement] {
+-        [
 +        if account.id != nil {
 +            return [
 +                UIAction(
@@ -1555,48 +973,41 @@ index 8af8560..0bcdeaa 100644
 +            ]
 +        }
 +        return [
-+            UIAction(
-+                title: String(localized: "Edit"),
-+                image: UIImage(systemName: account.isAPIKeyAccount ? "pencil" : "arrow.clockwise"),
-+            ) { [weak self] _ in
-+                self?.signIn(account)
-+            },
-+            UIAction(
-+                title: String(localized: "Models"),
-+                image: UIImage(systemName: "checklist"),
-+            ) { [weak self] _ in
-+                self?.presentPageAsFormSheet(ModelActivationController(account: account))
-+            },
-+            UIMenu(options: .displayInline, children: [
-+                UIAction(
-+                    title: String(localized: "Sign Out"),
-+                    image: UIImage(systemName: "rectangle.portrait.and.arrow.right"),
-+                    attributes: .destructive,
-+                ) { [weak self] _ in
+             UIAction(
+                 title: String(localized: "Edit"),
+                 image: UIImage(systemName: account.isAPIKeyAccount ? "pencil" : "arrow.clockwise"),
+@@ -255,14 +304,15 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+                     image: UIImage(systemName: "rectangle.portrait.and.arrow.right"),
+                     attributes: .destructive,
+                 ) { [weak self] _ in
+-                    self?.confirmSignOut(account.provider)
 +                    self?.confirmSignOut(account)
-+                },
-+            ]),
-+        ]
-+    }
-+
-+    override func tableView(_: UITableView, shouldHighlightRowAt indexPath: IndexPath) -> Bool {
+                 },
+             ]),
+         ]
+     }
+ 
+     override func tableView(_: UITableView, shouldHighlightRowAt indexPath: IndexPath) -> Bool {
+-        account(at: indexPath).map { !$0.signedIn } ?? false
 +        if case .addEndpoint? = dataSource.value(at: indexPath) { return true }
 +        return account(at: indexPath).map { $0.id != nil || !$0.signedIn } ?? false
-+    }
-+
-+    override func tableView(
-+        _: UITableView,
-+        contextMenuConfigurationForRowAt indexPath: IndexPath,
-+        point _: CGPoint,
-+    ) -> UIContextMenuConfiguration? {
+     }
+ 
+     override func tableView(
+@@ -270,7 +320,7 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+         contextMenuConfigurationForRowAt indexPath: IndexPath,
+         point _: CGPoint,
+     ) -> UIContextMenuConfiguration? {
+-        guard let account = account(at: indexPath), account.signedIn else { return nil }
 +        guard let account = account(at: indexPath), account.signedIn || account.id != nil else { return nil }
-+        return UIContextMenuConfiguration(actionProvider: { [weak self] _ in
-+            UIMenu(children: self?.accountActions(account) ?? [])
-+        })
-+    }
-+
-+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-+        tableView.deselectRow(at: indexPath, animated: true)
+         return UIContextMenuConfiguration(actionProvider: { [weak self] _ in
+             UIMenu(children: self?.accountActions(account) ?? [])
+         })
+@@ -278,12 +328,29 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+ 
+     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+         tableView.deselectRow(at: indexPath, animated: true)
+-        guard let account = account(at: indexPath), !account.signedIn else { return }
 +        if case .addEndpoint? = dataSource.value(at: indexPath) {
 +            editEndpoint(nil)
 +            return
@@ -1607,11 +1018,11 @@ index 8af8560..0bcdeaa 100644
 +            return
 +        }
 +        guard !account.signedIn else { return }
-+        signIn(account)
-+    }
-+
-+    // MARK: - Acting
-+
+         signIn(account)
+     }
+ 
+     // MARK: - Acting
+ 
 +    /// Adds an endpoint, or edits the one `account` is; the form saves it
 +    /// and the list reloads.
 +    private func editEndpoint(_ account: AgentAccount?) {
@@ -1620,15 +1031,21 @@ index 8af8560..0bcdeaa 100644
 +        presentPageAsFormSheet(page)
 +    }
 +
-+    private func signIn(_ account: AgentAccount) {
-+        let page = ProviderLoginController(account: account)
-+        page.onFinish = { [weak self] in self?.load() }
-+        // a sheet of its own over Settings, kept up until it is closed: a
-+        // stray swipe would end a sign-in waiting on Safari
-+        page.isModalInPresentation = true
-+        presentPageAsFormSheet(page)
-+    }
-+
+     private func signIn(_ account: AgentAccount) {
+         let page = ProviderLoginController(account: account)
+         page.onFinish = { [weak self] in self?.load() }
+@@ -293,22 +360,38 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+         presentPageAsFormSheet(page)
+     }
+ 
+-    private func confirmSignOut(_ provider: AgentProvider) {
+-        presentConfirmation(
+-            title: "Sign Out of \(provider.displayName)?",
+-            message: "Agent sessions that use it stop working until you sign in again.",
+-            confirmTitle: "Sign Out",
+-            destructive: true,
+-        ) { [weak self] in
+-            self?.signOut(provider)
 +    private func confirmSignOut(_ account: AgentAccount) {
 +        let name = account.title ?? account.provider.displayName
 +        if account.id != nil {
@@ -1649,25 +1066,24 @@ index 8af8560..0bcdeaa 100644
 +            ) { [weak self] in
 +                self?.signOut(account)
 +            }
-+        }
-+    }
-+
+         }
+     }
+ 
+-    private func signOut(_ provider: AgentProvider) {
 +    private func signOut(_ account: AgentAccount) {
-+        Task { [weak self] in
-+            do {
+         Task { [weak self] in
+             do {
+-                try await ApelinService.app.agentSignOut(provider: provider)
+-                EnabledModels.remove(for: provider)
 +                if let id = account.id {
 +                    try await ApelinService.app.agentEndpointRemove(id: id)
 +                } else {
 +                    try await ApelinService.app.agentSignOut(provider: account.provider)
 +                }
 +                EnabledModels.remove(for: EnabledModels.key(for: account))
-+                self?.load()
-+            } catch {
-+                self?.presentNotice(title: "Unable to Sign Out", message: error.readableMessage)
-+            }
-+        }
-+    }
-+}
+                 self?.load()
+             } catch {
+                 self?.presentNotice(title: "Unable to Sign Out", message: error.readableMessage)
 diff --git a/Apelin/Interface/Settings/SettingsViewController.swift b/Apelin/Interface/Settings/SettingsViewController.swift
 index c27e079..5740beb 100644
 --- a/Apelin/Interface/Settings/SettingsViewController.swift
@@ -1760,200 +1176,45 @@ index 2aca82f..6658136 100644
  
  /// Credentials delivered by the app for this session, held in memory only.
 diff --git a/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift b/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift
-index 6c39d90..2b7be51 100644
+index 6c39d90..469bbf1 100644
 --- a/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift
 +++ b/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift
-@@ -1,107 +1,124 @@
--import Foundation
--import KWWKAI
--
--/// Which model a session talks to. Credentials are not part of this value:
--/// they come from the session's `CredentialSource`, by kwwk store id.
--public enum ProviderConfiguration: Sendable, Hashable, Codable {
--    /// Anthropic's native Messages API with an API key
--    /// (`anthropic-api-key`), or with an Anthropic OAuth sign-in
--    /// (`anthropic`) when `oauth` is set.
--    case anthropic(model: String, oauth: Bool = false)
--    /// Any OpenAI-compatible Chat Completions endpoint. The base URL lives
--    /// with the credential (kwwk's `baseUrl` extra) so an endpoint and its
+@@ -10,8 +10,10 @@ public enum ProviderConfiguration: Sendable, Hashable, Codable {
+     case anthropic(model: String, oauth: Bool = false)
+     /// Any OpenAI-compatible Chat Completions endpoint. The base URL lives
+     /// with the credential (kwwk's `baseUrl` extra) so an endpoint and its
 -    /// key cannot be mismatched.
 -    case openAICompatible(model: String)
--    /// GitHub Copilot, through kwwk's Copilot provider: kwwk exchanges the
--    /// stored GitHub token for a Copilot session token and routes each model
--    /// to its wire format.
--    case githubCopilot(model: String)
--    /// Any other login kwwk stores, by its store id (`openai-codex`,
--    /// `kimi-coding`, `google-api-key`, …), registered by kwwk's own
--    /// `registerStored`, or Apelin's DeepSeek registration. A nil model is
--    /// the provider's own default.
--    case stored(storeID: String, model: String?)
--    /// A model already registered on kwwk's `APIRegistry` (tests and
--    /// in-process fakes). Needs no credential.
--    case registered(Model)
--
--    var storeID: String? {
--        switch self {
--        case let .anthropic(_, oauth):
--            oauth ? CredentialProviderID.anthropicOAuth : CredentialProviderID.anthropicAPIKey
--        case .openAICompatible: CredentialProviderID.openAICompatible
--        case .githubCopilot: CredentialProviderID.githubCopilot
--        case let .stored(storeID, _): storeID
--        case .registered: nil
--        }
--    }
--
--    var modelID: String? {
--        switch self {
--        case let .anthropic(model, _), let .openAICompatible(model), let .githubCopilot(model): model
--        case let .stored(_, model): model
--        case let .registered(model): model.id
--        }
--    }
--}
--
--public enum ProviderResolutionError: Error, Equatable, LocalizedError {
--    /// No credential for this provider; the session waits for the app to
--    /// deliver or sign in again. Nothing is read from the environment.
--    case missingCredentials(String)
--
--    public var errorDescription: String? {
--        switch self {
--        case let .missingCredentials(id): "No saved sign-in for \(id). Sign in again in Apelin."
--        }
--    }
--}
--
--struct ResolvedProvider: Sendable {
--    var model: Model
--    var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
--    /// The stored sign-in it was resolved from; nil for one that needs none.
--    var credentials: OAuthCredentials?
--}
--
--enum ProviderResolver {
--    /// Registers the provider on kwwk's registry from `credentials`, with
--    /// the same model capabilities used when verifying the account.
--    static func resolve(
--        _ configuration: ProviderConfiguration,
--        credentials: any CredentialSource,
--    ) async throws -> ResolvedProvider {
--        let stored = try await storedCredentials(configuration, in: credentials)
--        guard let storeID = configuration.storeID else {
--            if case let .registered(model) = configuration {
--                return ResolvedProvider(model: model, authResolver: nil)
--            }
--            preconditionFailure("unreachable")
--        }
--        // OAuthManager(source:) keeps refreshed tokens in its own memory and
--        // never writes them anywhere. Its refreshers are kwwk's own, with
--        // Kimi's given an identity so that it never reaches for ~/.kwwk.
--        let manager = OAuthManager(source: credentials, providers: KimiIdentity.refreshers())
--        guard let resolved = try await ProviderRegistration.resolve(
--            storeID: storeID,
--            manager: manager,
--            modelOverride: configuration.modelID,
--        ) else {
--            throw ProviderResolutionError.missingCredentials(storeID)
--        }
--        return ResolvedProvider(model: resolved.model, authResolver: resolved.authResolver, credentials: stored)
--    }
--
--    /// The stored sign-in `configuration` needs, nil for one that needs
--    /// none; missing, it is an error.
--    static func storedCredentials(
--        _ configuration: ProviderConfiguration,
--        in credentials: any CredentialSource,
--    ) async throws -> OAuthCredentials? {
--        guard let storeID = configuration.storeID else { return nil }
--        guard let stored = try await credentials.credentials(for: storeID) else {
--            throw ProviderResolutionError.missingCredentials(storeID)
--        }
--        return stored
--    }
--}
-+import Foundation
-+import KWWKAI
-+
-+/// Which model a session talks to. Credentials are not part of this value:
-+/// they come from the session's `CredentialSource`, by kwwk store id.
-+public enum ProviderConfiguration: Sendable, Hashable, Codable {
-+    /// Anthropic's native Messages API with an API key
-+    /// (`anthropic-api-key`), or with an Anthropic OAuth sign-in
-+    /// (`anthropic`) when `oauth` is set.
-+    case anthropic(model: String, oauth: Bool = false)
-+    /// Any OpenAI-compatible Chat Completions endpoint. The base URL lives
-+    /// with the credential (kwwk's `baseUrl` extra) so an endpoint and its
 +    /// key cannot be mismatched. `accountID` names which saved endpoint it
 +    /// is, out of the many a reader may keep; nil is the provider's one
 +    /// saved key.
 +    case openAICompatible(model: String, accountID: String? = nil)
-+    /// GitHub Copilot, through kwwk's Copilot provider: kwwk exchanges the
-+    /// stored GitHub token for a Copilot session token and routes each model
-+    /// to its wire format.
-+    case githubCopilot(model: String)
-+    /// Any other login kwwk stores, by its store id (`openai-codex`,
-+    /// `kimi-coding`, `google-api-key`, …), registered by kwwk's own
-+    /// `registerStored`, or Apelin's DeepSeek registration. A nil model is
-+    /// the provider's own default.
-+    case stored(storeID: String, model: String?)
-+    /// A model already registered on kwwk's `APIRegistry` (tests and
-+    /// in-process fakes). Needs no credential.
-+    case registered(Model)
-+
-+    var storeID: String? {
-+        switch self {
-+        case let .anthropic(_, oauth):
-+            oauth ? CredentialProviderID.anthropicOAuth : CredentialProviderID.anthropicAPIKey
+     /// GitHub Copilot, through kwwk's Copilot provider: kwwk exchanges the
+     /// stored GitHub token for a Copilot session token and routes each model
+     /// to its wire format.
+@@ -29,7 +31,8 @@ public enum ProviderConfiguration: Sendable, Hashable, Codable {
+         switch self {
+         case let .anthropic(_, oauth):
+             oauth ? CredentialProviderID.anthropicOAuth : CredentialProviderID.anthropicAPIKey
+-        case .openAICompatible: CredentialProviderID.openAICompatible
 +        case let .openAICompatible(_, accountID):
 +            accountID.map(CredentialProviderID.endpoint) ?? CredentialProviderID.openAICompatible
-+        case .githubCopilot: CredentialProviderID.githubCopilot
-+        case let .stored(storeID, _): storeID
-+        case .registered: nil
-+        }
-+    }
-+
-+    var modelID: String? {
-+        switch self {
+         case .githubCopilot: CredentialProviderID.githubCopilot
+         case let .stored(storeID, _): storeID
+         case .registered: nil
+@@ -38,7 +41,7 @@ public enum ProviderConfiguration: Sendable, Hashable, Codable {
+ 
+     var modelID: String? {
+         switch self {
+-        case let .anthropic(model, _), let .openAICompatible(model), let .githubCopilot(model): model
 +        case let .anthropic(model, _), let .openAICompatible(model, _), let .githubCopilot(model): model
-+        case let .stored(_, model): model
-+        case let .registered(model): model.id
-+        }
-+    }
-+}
-+
-+public enum ProviderResolutionError: Error, Equatable, LocalizedError {
-+    /// No credential for this provider; the session waits for the app to
-+    /// deliver or sign in again. Nothing is read from the environment.
-+    case missingCredentials(String)
-+
-+    public var errorDescription: String? {
-+        switch self {
-+        case let .missingCredentials(id): "No saved sign-in for \(id). Sign in again in Apelin."
-+        }
-+    }
-+}
-+
-+struct ResolvedProvider: Sendable {
-+    var model: Model
-+    var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
-+    /// The stored sign-in it was resolved from; nil for one that needs none.
-+    var credentials: OAuthCredentials?
-+}
-+
-+enum ProviderResolver {
-+    /// Registers the provider on kwwk's registry from `credentials`, with
-+    /// the same model capabilities used when verifying the account.
-+    static func resolve(
-+        _ configuration: ProviderConfiguration,
-+        credentials: any CredentialSource,
-+    ) async throws -> ResolvedProvider {
-+        let stored = try await storedCredentials(configuration, in: credentials)
-+        guard let storeID = configuration.storeID else {
-+            if case let .registered(model) = configuration {
-+                return ResolvedProvider(model: model, authResolver: nil)
-+            }
-+            preconditionFailure("unreachable")
-+        }
+         case let .stored(_, model): model
+         case let .registered(model): model.id
+         }
+@@ -78,12 +81,26 @@ enum ProviderResolver {
+             }
+             preconditionFailure("unreachable")
+         }
 +        // A saved endpoint registers as the one `openai-compatible`
 +        // provider kwwk knows, handed its own credential in memory: its
 +        // store id is Apelin's, and kwwk has no descriptor for it. Every
@@ -1968,33 +1229,17 @@ index 6c39d90..2b7be51 100644
 +        } else {
 +            source = DeliveredCredentialSource([registrationID: stored].compactMapValues { $0 })
 +        }
-+        // OAuthManager(source:) keeps refreshed tokens in its own memory and
-+        // never writes them anywhere. Its refreshers are kwwk's own, with
-+        // Kimi's given an identity so that it never reaches for ~/.kwwk.
+         // OAuthManager(source:) keeps refreshed tokens in its own memory and
+         // never writes them anywhere. Its refreshers are kwwk's own, with
+         // Kimi's given an identity so that it never reaches for ~/.kwwk.
+-        let manager = OAuthManager(source: credentials, providers: KimiIdentity.refreshers())
 +        let manager = OAuthManager(source: source, providers: KimiIdentity.refreshers())
-+        guard let resolved = try await ProviderRegistration.resolve(
+         guard let resolved = try await ProviderRegistration.resolve(
+-            storeID: storeID,
 +            storeID: registrationID,
-+            manager: manager,
-+            modelOverride: configuration.modelID,
-+        ) else {
-+            throw ProviderResolutionError.missingCredentials(storeID)
-+        }
-+        return ResolvedProvider(model: resolved.model, authResolver: resolved.authResolver, credentials: stored)
-+    }
-+
-+    /// The stored sign-in `configuration` needs, nil for one that needs
-+    /// none; missing, it is an error.
-+    static func storedCredentials(
-+        _ configuration: ProviderConfiguration,
-+        in credentials: any CredentialSource,
-+    ) async throws -> OAuthCredentials? {
-+        guard let storeID = configuration.storeID else { return nil }
-+        guard let stored = try await credentials.credentials(for: storeID) else {
-+            throw ProviderResolutionError.missingCredentials(storeID)
-+        }
-+        return stored
-+    }
-+}
+             manager: manager,
+             modelOverride: configuration.modelID,
+         ) else {
 diff --git a/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderRegistration.swift b/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderRegistration.swift
 index cba50af..417f0bb 100644
 --- a/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderRegistration.swift
