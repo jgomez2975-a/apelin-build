@@ -1364,7 +1364,7 @@ index c27e079..5740beb 100644
          if case .version = dataSource.value(at: indexPath)?.row {
              return false
 diff --git a/Apelin/Resources/Localizable.xcstrings b/Apelin/Resources/Localizable.xcstrings
-index 006a2f9..a73d8a7 100644
+index 006a2f9..956576b 100644
 --- a/Apelin/Resources/Localizable.xcstrings
 +++ b/Apelin/Resources/Localizable.xcstrings
 @@ -76340,6 +76340,1755 @@
@@ -3080,13 +3080,13 @@ index 006a2f9..a73d8a7 100644
 +        "ja" : {
 +          "stringUnit" : {
 +            "state" : "translated",
-+            "value" : "%@ から %lld 個のモデルを一覧に入れました。保存すると保持されます。"
++            "value" : "%2$@ から %1$lld 個のモデルを一覧に入れました。保存すると保持されます。"
 +          }
 +        },
 +        "ko" : {
 +          "stringUnit" : {
 +            "state" : "translated",
-+            "value" : "%@에서 모델 %lld개를 목록에 넣었습니다. 저장하면 유지됩니다."
++            "value" : "%2$@에서 모델 %1$lld개를 목록에 넣었습니다. 저장하면 유지됩니다."
 +          }
 +        },
 +        "pt-BR" : {
@@ -3110,13 +3110,13 @@ index 006a2f9..a73d8a7 100644
 +        "zh-Hans" : {
 +          "stringUnit" : {
 +            "state" : "translated",
-+            "value" : "已把 %@ 的 %lld 个模型放进列表，保存后生效。"
++            "value" : "已把 %2$@ 的 %1$lld 个模型放进列表，保存后生效。"
 +          }
 +        },
 +        "zh-Hant" : {
 +          "stringUnit" : {
 +            "state" : "translated",
-+            "value" : "已把 %@ 的 %lld 個模型放進列表，儲存後生效。"
++            "value" : "已把 %2$@ 的 %1$lld 個模型放進列表，儲存後生效。"
 +          }
 +        }
 +      }
