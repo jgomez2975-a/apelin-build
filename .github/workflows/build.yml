@@ -1,0 +1,86 @@
+# Builds Apelin 0.3.1 with the Minis skin and the multiple-endpoint settings
+# from a patch kept in this repository: the app's own source is fetched from
+# the upstream release at run time, so nothing here is a copy of it.
+#
+# Nothing is published: the packages land in the run's artifacts.
+name: Build Apelin endpoints
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_INSTALL_CLEANUP: "1"
+
+jobs:
+  build:
+    name: Package both flavours
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Check out the patch
+        uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest="$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          sudo xcode-select -s "$latest/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install packaging dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          formulae=()
+          command -v dpkg-deb >/dev/null 2>&1 || formulae+=(dpkg)
+          command -v ldid >/dev/null 2>&1 || formulae+=(ldid)
+          command -v zstd >/dev/null 2>&1 || formulae+=(zstd)
+          if (( ${#formulae[@]} > 0 )); then
+            brew install "${formulae[@]}"
+          fi
+
+      - name: Fetch Apelin 0.3.1 and apply the patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -sSL --retry 3 -o apelin.tar.gz \
+            https://codeload.github.com/owngoal-dev/Apelin/tar.gz/refs/tags/v0.3.1
+          mkdir -p src
+          tar xzf apelin.tar.gz -C src --strip-components=1
+          cd src
+          git init -q .
+          git apply --verbose ../apelin-0.3.1-endpoints.patch
+
+      - name: Build, package and verify the IDE and every extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd src
+          make deb-all CONFIGURATION=Release SKIP_HARNESS=1 \
+            BUILD_NUMBER="$GITHUB_RUN_NUMBER"
+
+      - name: Collect packages
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          find src/build -type f \( -name '*.deb' -o -name '*_Templates.tar.zst' \) -print0 2>/dev/null \
+            | while IFS= read -r -d '' f; do cp "$f" out/; done
+          ls -la out || true
+          if ls out/* >/dev/null 2>&1; then (cd out && shasum -a 256 * > SHA256SUMS); fi
+
+      - name: Upload Debian packages
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apelin-0.3.1-endpoints
+          path: out
+          if-no-files-found: warn
