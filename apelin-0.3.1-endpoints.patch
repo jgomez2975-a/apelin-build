@@ -640,10 +640,10 @@ index dd8ceed..464b995 100644
          }
 diff --git a/Apelin/Interface/Settings/Accounts/EndpointFormController.swift b/Apelin/Interface/Settings/Accounts/EndpointFormController.swift
 new file mode 100644
-index 0000000..6cdcc6e
+index 0000000..1e0366d
 --- /dev/null
 +++ b/Apelin/Interface/Settings/Accounts/EndpointFormController.swift
-@@ -0,0 +1,188 @@
+@@ -0,0 +1,305 @@
 +import ApelinProtocol
 +import UIKit
 +
@@ -652,7 +652,8 @@ index 0000000..6cdcc6e
 +///
 +/// The key is written once and never read back, so an edit that leaves the
 +/// field empty keeps the saved one: renaming an endpoint does not ask for
-+/// its key again.
++/// its key again. The models come from the site itself when the reader asks
++/// for them, so a site that serves forty is not forty lines of typing.
 +final class EndpointFormController: TableController {
 +    var onFinish: (() -> Void)?
 +
@@ -683,22 +684,33 @@ index 0000000..6cdcc6e
 +        }
 +    }
 +
++    private enum Row: Hashable {
++        case field(Field)
++        case fetch
++    }
++
 +    private let account: AgentAccount?
 +    private var fields: [Field: UITextField] = [:]
 +    private var cells: [Field: UITableViewCell] = [:]
 +    private var saving = false
++    private var fetching = false
 +
-+    private lazy var dataSource = TableDataSource<Field, Field, Field>(
++    private lazy var dataSource = TableDataSource<Field, Row, Row>(
 +        tableView: tableView,
 +        identifier: { $0 },
 +    ) { [weak self] _, _, row in
-+        self?.cells[row]
++        self?.cell(for: row)
 +    }
 +
 +    private lazy var saveItem = UIBarButtonItem(
 +        title: String(localized: "Save"),
 +        primaryAction: UIAction { [weak self] _ in self?.save() },
 +    )
++
++    private lazy var fetchCell: UITableViewCell = {
++        let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
++        return cell
++    }()
 +
 +    /// `account` is the endpoint being edited; nil adds one.
 +    init(account: AgentAccount? = nil) {
@@ -719,14 +731,19 @@ index 0000000..6cdcc6e
 +        tableView.rowHeight = UITableView.automaticDimension
 +        tableView.estimatedRowHeight = 52
 +        dataSource.headerTitle = { $0.heading }
-+        let sections: [(Field, [Field])] = Field.allCases.map { ($0, [$0]) }
-+        dataSource.update(sections)
 +        for field in Field.allCases {
 +            let input = input(for: field)
 +            input.accessibilityLabel = field.heading
++            input.returnKeyType = field == .models ? .done : .next
++            input.addAction(UIAction { [weak self] _ in self?.advance(from: field) }, for: .editingDidEndOnExit)
 +            fields[field] = input
 +            cells[field] = cell(containing: input)
 +        }
++        updateFetchCell()
++        dataSource.update(Field.allCases.map { field -> (Field, [Row]) in
++            let rows: [Row] = [.field(field)]
++            return (field, field == .models ? rows + [.fetch] : rows)
++        })
 +    }
 +
 +    override func viewDidAppear(_ animated: Bool) {
@@ -782,6 +799,13 @@ index 0000000..6cdcc6e
 +        return cell
 +    }
 +
++    private func cell(for row: Row) -> UITableViewCell? {
++        switch row {
++        case let .field(field): return cells[field]
++        case .fetch: return fetchCell
++        }
++    }
++
 +    private func trimmed(_ field: Field) -> String {
 +        (fields[field]?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 +    }
@@ -793,11 +817,93 @@ index 0000000..6cdcc6e
 +            .filter { !$0.isEmpty }
 +    }
 +
++    private func advance(from field: Field) {
++        guard let index = Field.allCases.firstIndex(of: field),
++              index + 1 < Field.allCases.count
++        else {
++            view.endEditing(true)
++            return
++        }
++        fields[Field.allCases[index + 1]]?.becomeFirstResponder()
++    }
++
++    // MARK: - Reading the site's models
++
++    private func updateFetchCell() {
++        var content = fetchCell.defaultContentConfiguration()
++        if fetching {
++            content.text = String(localized: "Fetching Models")
++            content.textProperties.color = .secondaryLabel
++            fetchCell.accessibilityTraits = [.button, .notEnabled]
++        } else {
++            content.text = String(localized: "Fetch Models")
++            content.textProperties.color = .tintColor
++            fetchCell.accessibilityTraits = .button
++        }
++        fetchCell.accessibilityLabel = content.text
++        fetchCell.contentConfiguration = content
++    }
++
++    private func fetchModels() {
++        guard !fetching, !saving else { return }
++        let address = trimmed(.baseURL)
++        guard !address.isEmpty else {
++            presentNotice(
++                title: "Address Needed",
++                message: String(localized: "Enter the endpoint’s address, then fetch its models."),
++            )
++            fields[.baseURL]?.becomeFirstResponder()
++            return
++        }
++        let key = trimmed(.apiKey)
++        let saved = account?.endpoint
++        // An edit that leaves the key field alone reads with the saved one,
++        // which only the worker has — and only for the address it was saved
++        // with, so a changed address asks for the key again.
++        let readsSavedKey = key.isEmpty && saved?.hasKey == true && address == (saved?.baseURL ?? "")
++        if key.isEmpty, !readsSavedKey {
++            presentNotice(
++                title: "Key Needed",
++                message: String(localized: "Enter the endpoint’s key so its model list can be read."),
++            )
++            fields[.apiKey]?.becomeFirstResponder()
++            return
++        }
++        view.endEditing(true)
++        fetching = true
++        updateFetchCell()
++        Task { [weak self] in
++            guard let self else { return }
++            defer {
++                fetching = false
++                updateFetchCell()
++            }
++            do {
++                let list: [String]
++                if readsSavedKey, let id = account?.id {
++                    list = try await ApelinService.app
++                        .agentModelList(provider: .openAICompatible, accountID: id).models
++                } else {
++                    list = try await EndpointModelProbe.models(address: address, apiKey: key)
++                }
++                fields[.models]?.text = list.joined(separator: ", ")
++                presentNotice(
++                    title: "Models Found",
++                    message: String(localized: "\(list.count) models are in the list now. Save to keep them."),
++                )
++            } catch {
++                presentNotice(title: "Unable to Fetch Models", message: error.readableMessage)
++            }
++        }
++    }
++
++    // MARK: - Saving
++
 +    private func save() {
 +        guard !saving else { return }
 +        let title = trimmed(.title)
 +        guard !title.isEmpty else {
-+            presentNotice(title: "Name Needed", message: "Give this endpoint a name to list it by.")
++            presentNotice(title: "Name Needed", message: String(localized: "Give this endpoint a name to list it by."))
 +            fields[.title]?.becomeFirstResponder()
 +            return
 +        }
@@ -831,9 +937,100 @@ index 0000000..6cdcc6e
 +            }
 +        }
 +    }
++
++    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
++        tableView.deselectRow(at: indexPath, animated: true)
++        guard let row = dataSource.value(at: indexPath) else { return }
++        switch row {
++        case let .field(field):
++            fields[field]?.becomeFirstResponder()
++        case .fetch:
++            fetchModels()
++        }
++    }
++}
+diff --git a/Apelin/Interface/Settings/Accounts/EndpointModelProbe.swift b/Apelin/Interface/Settings/Accounts/EndpointModelProbe.swift
+new file mode 100644
+index 0000000..dd834c5
+--- /dev/null
++++ b/Apelin/Interface/Settings/Accounts/EndpointModelProbe.swift
+@@ -0,0 +1,74 @@
++import ApelinCore
++import Foundation
++
++/// Reads the model list of an endpoint the form is still holding.
++///
++/// The account worker answers this for a saved endpoint, but the key it reads
++/// is the one in the keychain, and a key typed into this form is not there
++/// until Save. So this sends the one request the worker would have sent —
++/// `GET {address}/models`, the key as a bearer token — and parses the same
++/// shapes the provider's own catalogue is written in.
++enum EndpointModelProbe {
++    /// One endpoint keeps as many models as the worker accepts for it.
++    static let maximumModels = 64
++
++    static func models(address: String, apiKey: String) async throws -> [String] {
++        guard var components = URLComponents(string: address.trimmingCharacters(in: .whitespacesAndNewlines)),
++              let scheme = components.scheme?.lowercased(), scheme == "https" || scheme == "http",
++              components.host?.isEmpty == false
++        else {
++            throw ApelinError(.badRequest, String(localized: "Enter a valid HTTP or HTTPS address."))
++        }
++        // The form asks for the base URL a conversation would post to, so the
++        // list hangs off it: `/v1` stays, a bare host gains one, and a site
++        // with its own prefix keeps it.
++        let path = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
++        components.path = "/" + (path.isEmpty ? "v1" : path) + "/models"
++        components.query = nil
++        components.fragment = nil
++        guard let url = components.url else {
++            throw ApelinError(.badRequest, String(localized: "Enter a valid HTTP or HTTPS address."))
++        }
++        var request = URLRequest(url: url, timeoutInterval: 20)
++        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
++        request.setValue("application/json", forHTTPHeaderField: "Accept")
++        let data: Data
++        let response: URLResponse
++        do {
++            (data, response) = try await URLSession.shared.data(for: request)
++        } catch is CancellationError {
++            throw CancellationError()
++        } catch {
++            throw ApelinError(
++                .unavailable,
++                String(localized: "Unable to reach the endpoint. Check the address and the key, then try again."),
++            )
++        }
++        guard let http = response as? HTTPURLResponse else {
++            throw ApelinError(.unavailable, String(localized: "The endpoint did not return a model list."))
++        }
++        guard http.statusCode == 200 else {
++            throw ApelinError(
++                .unavailable,
++                String(
++                    localized: "The endpoint answered \(http.statusCode). Check the address and the key, then try again.",
++                ),
++            )
++        }
++        guard data.count <= 4 * 1024 * 1024,
++              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
++              let listed = (root["data"] ?? root["models"]) as? [[String: Any]]
++        else { throw ApelinError(.unavailable, String(localized: "The endpoint did not return a model list.")) }
++        let ids = listed.compactMap { ($0["id"] ?? $0["name"]) as? String }
++            .map { $0.hasPrefix("models/") ? String($0.dropFirst(7)) : $0 }
++            .filter { !$0.isEmpty && $0.count <= 256 }
++        let unique = Array(Set(ids)).sorted()
++        guard !unique.isEmpty else {
++            throw ApelinError(
++                .unavailable,
++                String(localized: "The endpoint lists no models. Add one by hand, or check that the address is the one it serves."),
++            )
++        }
++        return Array(unique.prefix(maximumModels))
++    }
 +}
 diff --git a/Apelin/Interface/Settings/Accounts/ModelActivationController.swift b/Apelin/Interface/Settings/Accounts/ModelActivationController.swift
-index 167681c..ddce514 100644
+index 167681c..878a853 100644
 --- a/Apelin/Interface/Settings/Accounts/ModelActivationController.swift
 +++ b/Apelin/Interface/Settings/Accounts/ModelActivationController.swift
 @@ -18,9 +18,10 @@ final class ModelActivationController: TableController, UISearchResultsUpdating
@@ -850,7 +1047,27 @@ index 167681c..ddce514 100644
          selected = account.isAPIKeyAccount ? enabled.subtracting(hidden) : enabled.intersection(available)
          models = account.isAPIKeyAccount
              ? Array(Set(available).union(custom).union(selected).subtracting(hidden)).sorted()
-@@ -251,7 +252,7 @@ final class ModelActivationController: TableController, UISearchResultsUpdating
+@@ -99,7 +100,10 @@ final class ModelActivationController: TableController, UISearchResultsUpdating
+             guard let self else { return }
+             do {
+                 let fetched = try await ProviderProgress.run(title: "Fetching Models", from: self) {
+-                    try await ApelinService.app.agentModelList(provider: self.account.provider).models
++                    try await ApelinService.app.agentModelList(
++                        provider: self.account.provider,
++                        accountID: self.account.id,
++                    ).models
+                 }
+                 models = Array(Set(fetched).union(custom).union(selected).subtracting(hidden)).sorted()
+                 updateSearchResults(for: search)
+@@ -216,6 +220,7 @@ final class ModelActivationController: TableController, UISearchResultsUpdating
+                     let handle = try await ApelinService.app.agentModelActivate(
+                         provider: self.account.provider,
+                         models: self.selected.sorted(),
++                        accountID: self.account.id,
+                     )
+                     self.verification = handle
+                     if Task.isCancelled {
+@@ -251,7 +256,7 @@ final class ModelActivationController: TableController, UISearchResultsUpdating
      }
  
      private func finishSaving() {
@@ -1139,10 +1356,10 @@ index c27e079..5740beb 100644
          if case .version = dataSource.value(at: indexPath)?.row {
              return false
 diff --git a/Apelin/Resources/Localizable.xcstrings b/Apelin/Resources/Localizable.xcstrings
-index 006a2f9..6e6b22a 100644
+index 006a2f9..aa65416 100644
 --- a/Apelin/Resources/Localizable.xcstrings
 +++ b/Apelin/Resources/Localizable.xcstrings
-@@ -76340,6 +76340,853 @@
+@@ -76340,6 +76340,1755 @@
            }
          }
        }
@@ -1993,6 +2210,908 @@ index 006a2f9..6e6b22a 100644
 +          }
 +        }
 +      }
++    },
++    "Address Needed" : {
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "العنوان مطلوب"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Adresse erforderlich"
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Address Needed"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Se necesita una dirección"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Adresse requise"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Indirizzo necessario"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "アドレスが必要です"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "주소가 필요합니다"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Endereço necessário"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Требуется адрес"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Cần địa chỉ"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "需要地址"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "需要位址"
++          }
++        }
++      }
++    },
++    "Enter the endpoint’s address, then fetch its models." : {
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "أدخل عنوان نقطة النهاية، ثم اجلب نماذجها."
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Gib die Adresse des Endpunkts ein und rufe dann seine Modelle ab."
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Enter the endpoint’s address, then fetch its models."
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Introduce la dirección del endpoint y luego obtén sus modelos."
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Saisissez l’adresse du point de terminaison, puis récupérez ses modèles."
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Inserisci l’indirizzo dell’endpoint, poi recupera i suoi modelli."
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "エンドポイントのアドレスを入力してから、モデルを取得してください。"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "엔드포인트 주소를 입력한 다음 모델을 가져오세요."
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Insira o endereço do endpoint e depois busque os modelos dele."
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Введите адрес конечной точки, затем загрузите её модели."
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Nhập địa chỉ của điểm cuối, rồi tải danh sách mô hình của nó."
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "先填端点地址，再获取模型。"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "先填端點位址，再取得模型。"
++          }
++        }
++      }
++    },
++    "Key Needed" : {
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "المفتاح مطلوب"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Schlüssel erforderlich"
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Key Needed"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Se necesita una clave"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Clé requise"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Chiave necessaria"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "キーが必要です"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "키가 필요합니다"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Chave necessária"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Требуется ключ"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Cần khóa"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "需要密钥"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "需要金鑰"
++          }
++        }
++      }
++    },
++    "Enter the endpoint’s key so its model list can be read." : {
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "أدخل مفتاح نقطة النهاية حتى يمكن قراءة قائمة نماذجها."
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Gib den Schlüssel des Endpunkts ein, damit seine Modellliste gelesen werden kann."
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Enter the endpoint’s key so its model list can be read."
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Introduce la clave del endpoint para poder leer su lista de modelos."
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Saisissez la clé du point de terminaison pour que sa liste de modèles puisse être lue."
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Inserisci la chiave dell’endpoint per poter leggere il suo elenco di modelli."
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "モデル一覧を読み取るには、エンドポイントのキーを入力してください。"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "모델 목록을 읽으려면 엔드포인트 키를 입력하세요."
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Insira a chave do endpoint para que a lista de modelos possa ser lida."
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Введите ключ конечной точки, чтобы можно было прочитать список её моделей."
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Nhập khóa của điểm cuối để có thể đọc danh sách mô hình."
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "填入端点密钥后才能读取模型列表。"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "填入端點金鑰後才能讀取模型列表。"
++          }
++        }
++      }
++    },
++    "Models Found" : {
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "تم العثور على نماذج"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Modelle gefunden"
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Models Found"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Modelos encontrados"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Modèles trouvés"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Modelli trovati"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "モデルが見つかりました"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "모델을 찾았습니다"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Modelos encontrados"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Модели найдены"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Đã tìm thấy mô hình"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "已找到模型"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "已找到模型"
++          }
++        }
++      }
++    },
++    "%lld models are in the list now. Save to keep them." : {
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "يوجد الآن %lld نموذجًا في القائمة. احفظ للإبقاء عليها."
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%lld Modelle stehen jetzt in der Liste. Speichere, um sie zu behalten."
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%lld models are in the list now. Save to keep them."
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Ahora hay %lld modelos en la lista. Guarda para conservarlos."
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%lld modèles figurent maintenant dans la liste. Enregistrez pour les conserver."
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Ora ci sono %lld modelli nell’elenco. Salva per mantenerli."
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%lld 個のモデルが一覧にあります。保存すると保持されます。"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "이제 목록에 %lld개의 모델이 있습니다. 저장하면 유지됩니다."
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Agora há %lld modelos na lista. Salve para mantê-los."
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "В списке теперь %lld моделей. Сохраните, чтобы оставить их."
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Hiện có %lld mô hình trong danh sách. Lưu để giữ lại."
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "已把 %lld 个模型放进列表，保存后生效。"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "已把 %lld 個模型放進列表，儲存後生效。"
++          }
++        }
++      }
++    },
++    "Enter a valid HTTP or HTTPS address." : {
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "أدخل عنوان HTTP أو HTTPS صالحًا."
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Gib eine gültige HTTP- oder HTTPS-Adresse ein."
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Enter a valid HTTP or HTTPS address."
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Introduce una dirección HTTP o HTTPS válida."
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Saisissez une adresse HTTP ou HTTPS valide."
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Inserisci un indirizzo HTTP o HTTPS valido."
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "有効な HTTP または HTTPS のアドレスを入力してください。"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "올바른 HTTP 또는 HTTPS 주소를 입력하세요."
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Insira um endereço HTTP ou HTTPS válido."
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Введите корректный адрес HTTP или HTTPS."
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Nhập địa chỉ HTTP hoặc HTTPS hợp lệ."
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "填入有效的 HTTP 或 HTTPS 地址。"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "填入有效的 HTTP 或 HTTPS 位址。"
++          }
++        }
++      }
++    },
++    "Unable to reach the endpoint. Check the address and the key, then try again." : {
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "تعذّر الوصول إلى نقطة النهاية. تحقق من العنوان والمفتاح ثم حاول مجددًا."
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Der Endpunkt ist nicht erreichbar. Prüfe Adresse und Schlüssel und versuche es erneut."
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Unable to reach the endpoint. Check the address and the key, then try again."
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "No se puede acceder al endpoint. Comprueba la dirección y la clave e inténtalo de nuevo."
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Impossible de joindre le point de terminaison. Vérifiez l’adresse et la clé, puis réessayez."
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Impossibile raggiungere l’endpoint. Controlla l’indirizzo e la chiave, poi riprova."
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "エンドポイントに接続できません。アドレスとキーを確認して、もう一度お試しください。"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "엔드포인트에 연결할 수 없습니다. 주소와 키를 확인한 후 다시 시도하세요."
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Não foi possível alcançar o endpoint. Verifique o endereço e a chave e tente novamente."
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Не удаётся подключиться к конечной точке. Проверьте адрес и ключ и повторите попытку."
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Không thể kết nối tới điểm cuối. Kiểm tra địa chỉ và khóa rồi thử lại."
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "连不上这个端点。检查地址和密钥后再试。"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "連不上這個端點。檢查位址和金鑰後再試。"
++          }
++        }
++      }
++    },
++    "The endpoint did not return a model list." : {
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "لم تُرجع نقطة النهاية قائمة نماذج."
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Der Endpunkt hat keine Modellliste zurückgegeben."
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "The endpoint did not return a model list."
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "El endpoint no devolvió ninguna lista de modelos."
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Le point de terminaison n’a pas renvoyé de liste de modèles."
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "L’endpoint non ha restituito un elenco di modelli."
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "エンドポイントがモデル一覧を返しませんでした。"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "엔드포인트가 모델 목록을 반환하지 않았습니다."
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "O endpoint não retornou uma lista de modelos."
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Конечная точка не вернула список моделей."
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Điểm cuối không trả về danh sách mô hình."
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "这个端点没有返回模型列表。"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "這個端點沒有回傳模型列表。"
++          }
++        }
++      }
++    },
++    "The endpoint answered %lld. Check the address and the key, then try again." : {
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "أجابت نقطة النهاية بالرمز %lld. تحقق من العنوان والمفتاح ثم حاول مجددًا."
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Der Endpunkt hat mit %lld geantwortet. Prüfe Adresse und Schlüssel und versuche es erneut."
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "The endpoint answered %lld. Check the address and the key, then try again."
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "El endpoint respondió %lld. Comprueba la dirección y la clave e inténtalo de nuevo."
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Le point de terminaison a répondu %lld. Vérifiez l’adresse et la clé, puis réessayez."
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "L’endpoint ha risposto %lld. Controlla l’indirizzo e la chiave, poi riprova."
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "エンドポイントは %lld を返しました。アドレスとキーを確認して、もう一度お試しください。"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "엔드포인트가 %lld을(를) 반환했습니다. 주소와 키를 확인한 후 다시 시도하세요."
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "O endpoint respondeu %lld. Verifique o endereço e a chave e tente novamente."
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Конечная точка ответила %lld. Проверьте адрес и ключ и повторите попытку."
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Điểm cuối trả về %lld. Kiểm tra địa chỉ và khóa rồi thử lại."
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "端点返回了 %lld。检查地址和密钥后再试。"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "端點回傳了 %lld。檢查位址和金鑰後再試。"
++          }
++        }
++      }
++    },
++    "The endpoint lists no models. Add one by hand, or check that the address is the one it serves." : {
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "لا تسرد نقطة النهاية أي نماذج. أضف واحدًا يدويًا، أو تحقق من أن العنوان هو الذي تخدمه."
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Der Endpunkt listet keine Modelle. Füge eines von Hand hinzu oder prüfe, ob die Adresse die ist, die er bedient."
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "The endpoint lists no models. Add one by hand, or check that the address is the one it serves."
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "El endpoint no lista ningún modelo. Añade uno a mano o comprueba que la dirección es la que sirve."
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Le point de terminaison ne liste aucun modèle. Ajoutez-en un à la main ou vérifiez que l’adresse est bien celle qu’il sert."
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "L’endpoint non elenca alcun modello. Aggiungine uno a mano o verifica che l’indirizzo sia quello che serve."
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "エンドポイントにモデルがありません。手動で追加するか、アドレスが提供先のものか確認してください。"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "엔드포인트에 모델이 없습니다. 직접 추가하거나 주소가 해당 엔드포인트의 주소인지 확인하세요."
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "O endpoint não lista nenhum modelo. Adicione um manualmente ou verifique se o endereço é o que ele serve."
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Конечная точка не содержит моделей. Добавьте одну вручную или проверьте, что адрес принадлежит ей."
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Điểm cuối không có mô hình nào. Thêm thủ công hoặc kiểm tra xem địa chỉ có đúng là địa chỉ của nó không."
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "这个端点没有列出任何模型。手动加一个，或确认地址是否正确。"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "這個端點沒有列出任何模型。手動加一個，或確認位址是否正確。"
++          }
++        }
++      }
      }
    },
    "version" : "1.0"
@@ -2124,7 +3243,7 @@ index cba50af..417f0bb 100644
          }
          // The registry's transport is shared. Bind the key to this resolution
 diff --git a/Packages/ApelinAgent/Sources/ApelinAgentWorker/AgentWorker.swift b/Packages/ApelinAgent/Sources/ApelinAgentWorker/AgentWorker.swift
-index c299621..4589a7a 100644
+index c299621..0cb4534 100644
 --- a/Packages/ApelinAgent/Sources/ApelinAgentWorker/AgentWorker.swift
 +++ b/Packages/ApelinAgent/Sources/ApelinAgentWorker/AgentWorker.swift
 @@ -65,7 +65,11 @@ public enum AgentWorker {
@@ -2156,6 +3275,15 @@ index c299621..4589a7a 100644
          case .agentSkillList:
              await WorkerMain.serve(AgentSkillListRequest.self, request) { _ in
                  let home = URL(fileURLWithPath: context.assignment.home, isDirectory: true)
+@@ -155,7 +168,7 @@ public enum AgentWorker {
+             }
+         case .agentModelList:
+             await WorkerMain.serve(AgentModelListRequest.self, request) { query in
+-                try await accounts.models(for: query.provider)
++                try await accounts.models(for: query.provider, accountID: query.accountID)
+             }
+         case .agentModelActivate:
+             await WorkerMain.serve(AgentModelActivateRequest.self, request) { query in
 @@ -226,7 +239,7 @@ public enum AgentWorker {
              return .anthropic(model: model, oauth: true)
          case .openAICompatible:
@@ -2166,7 +3294,7 @@ index c299621..4589a7a 100644
               .zai, .zaiCodingCN, .openRouter, .openAI, .google, .deepSeek:
              return .stored(storeID: provider.storeID, model: model)
 diff --git a/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/AccountDesk.swift b/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/AccountDesk.swift
-index 86f48c1..fb7642f 100644
+index 86f48c1..61a12b9 100644
 --- a/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/AccountDesk.swift
 +++ b/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/AccountDesk.swift
 @@ -37,7 +37,7 @@ public struct SignInReporter: Sendable {
@@ -2193,6 +3321,28 @@ index 86f48c1..fb7642f 100644
          return AgentAccountListResponse(accounts: accounts)
      }
  
+@@ -239,8 +247,9 @@ public actor AccountDesk {
+         }
+     }
+ 
+-    public func models(for provider: AgentProvider) async throws -> AgentModelListResponse {
+-        guard let credentials = try await store.credentials(for: provider.storeID) else {
++    public func models(for provider: AgentProvider, accountID: String? = nil) async throws -> AgentModelListResponse {
++        let storeID = accountID.map(CredentialProviderID.endpoint) ?? provider.storeID
++        guard let credentials = try await store.credentials(for: storeID) else {
+             throw ApelinError(.notFound, "Sign in to the provider first.")
+         }
+         return try await AgentModelListResponse(models: ProviderModels.fetch(provider, credentials: credentials))
+@@ -254,7 +263,8 @@ public actor AccountDesk {
+         guard !request.models.isEmpty, request.models.count <= 64,
+               request.models.allSatisfy({ !$0.isEmpty && $0.count <= 256 && !$0.contains(where: \.isNewline) })
+         else { throw ApelinError(.badRequest, "Select between 1 and 64 valid model IDs.") }
+-        guard let credentials = try await store.credentials(for: request.provider.storeID) else {
++        let storeID = request.accountID.map(CredentialProviderID.endpoint) ?? request.provider.storeID
++        guard let credentials = try await store.credentials(for: storeID) else {
+             throw ApelinError(.notFound, "Sign in to the provider first.")
+         }
+         let usesAPIKey = ProviderModels.usesAPIKey(request.provider, credentials: credentials)
 diff --git a/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointStore.swift b/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointStore.swift
 new file mode 100644
 index 0000000..493d8e1
@@ -2488,7 +3638,7 @@ index eb6b217..f7103b7 100644
          self.reasoningEffort = reasoningEffort
          self.serviceTier = serviceTier
 diff --git a/Packages/ApelinKit/Sources/ApelinProtocol/Operations/AgentSignIn.swift b/Packages/ApelinKit/Sources/ApelinProtocol/Operations/AgentSignIn.swift
-index 0c5563c..1422067 100644
+index 0c5563c..0fd8407 100644
 --- a/Packages/ApelinKit/Sources/ApelinProtocol/Operations/AgentSignIn.swift
 +++ b/Packages/ApelinKit/Sources/ApelinProtocol/Operations/AgentSignIn.swift
 @@ -69,6 +69,13 @@ public enum AgentSignInField: String, Codable, Sendable, CaseIterable {
@@ -2544,7 +3694,52 @@ index 0c5563c..1422067 100644
          self.expiresAt = expiresAt
          self.models = models
          self.usesAPIKey = usesAPIKey
-@@ -292,3 +309,84 @@ public extension ApelinService {
+@@ -156,8 +173,12 @@ public struct AgentModelListRequest: OperationRequest {
+     public typealias Response = AgentModelListResponse
+     public static let operation = AppOperation.agentModelList
+     public var provider: AgentProvider
+-    public init(provider: AgentProvider) {
++    /// The saved endpoint to ask, for a provider that has many of them; nil
++    /// is the provider's own sign-in.
++    public var accountID: String?
++    public init(provider: AgentProvider, accountID: String? = nil) {
+         self.provider = provider
++        self.accountID = accountID
+     }
+ }
+ 
+@@ -174,8 +195,11 @@ public struct AgentModelActivateRequest: OperationRequest {
+     public static let operation = AppOperation.agentModelActivate
+     public var provider: AgentProvider
+     public var models: [String]
+-    public init(provider: AgentProvider, models: [String]) {
+-        self.provider = provider; self.models = models
++    /// The saved endpoint whose models these are, for a provider that has
++    /// many of them; nil is the provider's own sign-in.
++    public var accountID: String?
++    public init(provider: AgentProvider, models: [String], accountID: String? = nil) {
++        self.provider = provider; self.models = models; self.accountID = accountID
+     }
+ }
+ 
+@@ -262,12 +286,12 @@ public extension ApelinService {
+         try await send(AgentAPIConfigurationRequest(provider: provider))
+     }
+ 
+-    func agentModelList(provider: AgentProvider) async throws -> AgentModelListResponse {
+-        try await send(AgentModelListRequest(provider: provider))
++    func agentModelList(provider: AgentProvider, accountID: String? = nil) async throws -> AgentModelListResponse {
++        try await send(AgentModelListRequest(provider: provider, accountID: accountID))
+     }
+ 
+-    func agentModelActivate(provider: AgentProvider, models: [String]) async throws -> TaskHandle {
+-        try await send(AgentModelActivateRequest(provider: provider, models: models))
++    func agentModelActivate(provider: AgentProvider, models: [String], accountID: String? = nil) async throws -> TaskHandle {
++        try await send(AgentModelActivateRequest(provider: provider, models: models, accountID: accountID))
+     }
+ 
+     func agentSignIn(provider: AgentProvider, method: AgentSignInMethod? = nil) async throws -> TaskHandle {
+@@ -292,3 +316,84 @@ public extension ApelinService {
          try await send(AgentCredentialImportRequest())
      }
  }
