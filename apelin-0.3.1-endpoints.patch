@@ -559,10 +559,10 @@ index 75590b1..8b89d47 100644
      }
  }
 diff --git a/Apelin/Interface/Settings/Accounts/EnabledModels.swift b/Apelin/Interface/Settings/Accounts/EnabledModels.swift
-index dd8ceed..1463bdf 100644
+index dd8ceed..464b995 100644
 --- a/Apelin/Interface/Settings/Accounts/EnabledModels.swift
 +++ b/Apelin/Interface/Settings/Accounts/EnabledModels.swift
-@@ -6,42 +6,54 @@ extension Notification.Name {
+@@ -6,42 +6,58 @@ extension Notification.Name {
  }
  
  /// A device preference, separate from the provider's credentials and catalog.
@@ -574,26 +574,30 @@ index dd8ceed..1463bdf 100644
 -    private static func key(_ provider: AgentProvider) -> String {
 -        "enabledModels.\(provider.rawValue)"
 +    /// What a row's models are kept under.
-+    static func key(for account: AgentAccount) -> String {
-+        account.id.map { "\(account.provider.rawValue):\($0)" } ?? account.provider.rawValue
++    static func key(provider: AgentProvider, id: String?) -> String {
++        id.map { "\(provider.rawValue):\($0)" } ?? provider.rawValue
      }
  
 -    static func ids(for provider: AgentProvider) -> Set<String> {
 -        Set(UserDefaults.standard.stringArray(forKey: key(provider)) ?? [])
-+    private static func names(_ key: String) -> (enabled: String, custom: String, hidden: String) {
-+        ("enabledModels.\(key)", "customModels.\(key)", "hiddenModels.\(key)")
++    static func key(for account: AgentAccount) -> String {
++        key(provider: account.provider, id: account.id)
      }
  
 -    static func save(_ models: Set<String>, custom: Set<String>, hidden: Set<String>, for provider: AgentProvider) {
 -        UserDefaults.standard.set(models.sorted(), forKey: key(provider))
 -        UserDefaults.standard.set(custom.sorted(), forKey: "customModels.\(provider.rawValue)")
 -        UserDefaults.standard.set(hidden.sorted(), forKey: "hiddenModels.\(provider.rawValue)")
++    private static func names(_ key: String) -> (enabled: String, custom: String, hidden: String) {
++        ("enabledModels.\(key)", "customModels.\(key)", "hiddenModels.\(key)")
++    }
++
 +    static func ids(for key: String) -> Set<String> {
 +        Set(UserDefaults.standard.stringArray(forKey: names(key).enabled) ?? [])
 +    }
 +
 +    static func save(_ models: Set<String>, custom: Set<String>, hidden: Set<String>, for key: String) {
-+        let names = names(key)
++        let names = Self.names(key)
 +        UserDefaults.standard.set(models.sorted(), forKey: names.enabled)
 +        UserDefaults.standard.set(custom.sorted(), forKey: names.custom)
 +        UserDefaults.standard.set(hidden.sorted(), forKey: names.hidden)
@@ -605,7 +609,7 @@ index dd8ceed..1463bdf 100644
 -        UserDefaults.standard.removeObject(forKey: "customModels.\(provider.rawValue)")
 -        UserDefaults.standard.removeObject(forKey: "hiddenModels.\(provider.rawValue)")
 +    static func remove(for key: String) {
-+        let names = names(key)
++        let names = Self.names(key)
 +        UserDefaults.standard.removeObject(forKey: names.enabled)
 +        UserDefaults.standard.removeObject(forKey: names.custom)
 +        UserDefaults.standard.removeObject(forKey: names.hidden)
@@ -629,17 +633,17 @@ index dd8ceed..1463bdf 100644
              guard account.signedIn else { return nil }
              var enabled = account
 -            let ids = ids(for: account.provider).subtracting(hiddenIDs(for: account.provider))
-+            let key = key(for: account)
-+            let ids = ids(for: key).subtracting(hiddenIDs(for: key))
++            let storeKey = key(for: account)
++            let ids = ids(for: storeKey).subtracting(hiddenIDs(for: storeKey))
              enabled.models = account.isAPIKeyAccount ? ids.sorted() : (account.models ?? []).filter { ids.contains($0) }
              return enabled.models?.isEmpty == false ? enabled : nil
          }
 diff --git a/Apelin/Interface/Settings/Accounts/EndpointFormController.swift b/Apelin/Interface/Settings/Accounts/EndpointFormController.swift
 new file mode 100644
-index 0000000..08025cc
+index 0000000..6cdcc6e
 --- /dev/null
 +++ b/Apelin/Interface/Settings/Accounts/EndpointFormController.swift
-@@ -0,0 +1,180 @@
+@@ -0,0 +1,188 @@
 +import ApelinProtocol
 +import UIKit
 +
@@ -668,11 +672,13 @@ index 0000000..08025cc
 +        }
 +
 +        var placeholder: String {
++            // An address, a key and a list of IDs are not prose: they read
++            // the same in every language, so they stay out of the catalogue.
 +            switch self {
 +            case .title: String(localized: "The name this site is listed by")
-+            case .baseURL: String(localized: "https://…")
-+            case .apiKey: String(localized: "sk-…")
-+            case .models: String(localized: "gpt-4o, claude-sonnet-4-5")
++            case .baseURL: "https://…"
++            case .apiKey: "sk-…"
++            case .models: "gpt-4o, claude-sonnet-4-5"
 +            }
 +        }
 +    }
@@ -802,7 +808,7 @@ index 0000000..08025cc
 +        Task { [weak self] in
 +            guard let self else { return }
 +            do {
-+                _ = try await ApelinService.app.agentEndpointSave(AgentEndpointSaveRequest(
++                let saved = try await ApelinService.app.agentEndpointSave(AgentEndpointSaveRequest(
 +                    id: account?.id,
 +                    title: title,
 +                    baseURL: trimmed(.baseURL),
@@ -810,6 +816,12 @@ index 0000000..08025cc
 +                    defaultModel: account?.endpoint?.defaultModel,
 +                    models: models,
 +                ))
++                // A new endpoint arrives with its models on, so it is in the
++                // composer at once; one that already has picks keeps them.
++                let modelsKey = EnabledModels.key(provider: .openAICompatible, id: saved.id)
++                if EnabledModels.ids(for: modelsKey).isEmpty, !saved.models.isEmpty {
++                    EnabledModels.save(Set(saved.models), custom: [], hidden: [], for: modelsKey)
++                }
 +                onFinish?()
 +                dismiss(animated: true)
 +            } catch {
@@ -1126,6 +1138,864 @@ index c27e079..5740beb 100644
      override func tableView(_: UITableView, shouldHighlightRowAt indexPath: IndexPath) -> Bool {
          if case .version = dataSource.value(at: indexPath)?.row {
              return false
+diff --git a/Apelin/Resources/Localizable.xcstrings b/Apelin/Resources/Localizable.xcstrings
+index 006a2f9..6e6b22a 100644
+--- a/Apelin/Resources/Localizable.xcstrings
++++ b/Apelin/Resources/Localizable.xcstrings
+@@ -76340,6 +76340,853 @@
+           }
+         }
+       }
++    },
++    "Add Endpoint" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "إضافة نقطة نهاية"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Endpunkt hinzufügen"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Añadir punto de conexión"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Ajouter un point de terminaison"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Aggiungi endpoint"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "エンドポイントを追加"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "엔드포인트 추가"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Adicionar endpoint"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Добавить конечную точку"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Thêm điểm cuối"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "添加端点"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "新增端點"
++          }
++        }
++      }
++    },
++    "Address" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "العنوان"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Adresse"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Dirección"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Adresse"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Indirizzo"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "アドレス"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "주소"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Endereço"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Адрес"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Địa chỉ"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "地址"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "位址"
++          }
++        }
++      }
++    },
++    "Custom Endpoints" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "نقاط نهاية مخصصة"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Eigene Endpunkte"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Puntos de conexión propios"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Points de terminaison personnalisés"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Endpoint personalizzati"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "カスタムエンドポイント"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "사용자 엔드포인트"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Endpoints personalizados"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Свои конечные точки"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Điểm cuối tùy chỉnh"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "自定义端点"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "自訂端點"
++          }
++        }
++      }
++    },
++    "Delete %@?" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "حذف %@؟"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%@ löschen?"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "¿Eliminar %@?"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Supprimer %@ ?"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Eliminare %@?"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%@を削除しますか？"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%@을(를) 삭제하겠습니까?"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Excluir %@?"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Удалить %@?"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Xóa %@?"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "删除 %@？"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "刪除 %@？"
++          }
++        }
++      }
++    },
++    "Endpoint" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "نقطة النهاية"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Endpunkt"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Punto de conexión"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Point de terminaison"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Endpoint"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "エンドポイント"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "엔드포인트"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Endpoint"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Конечная точка"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Điểm cuối"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "端点"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "端點"
++          }
++        }
++      }
++    },
++    "Give this endpoint a name to list it by." : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "امنح نقطة النهاية هذه اسمًا تُدرج به."
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Gib diesem Endpunkt einen Namen, unter dem er in der Liste steht."
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Ponle a este punto de conexión un nombre con el que aparecerá en la lista."
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Donnez à ce point de terminaison un nom sous lequel il apparaîtra."
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Dai un nome a questo endpoint per elencarlo."
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "このエンドポイントを一覧に表示する名前を入力してください。"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "목록에 표시할 이 엔드포인트의 이름을 입력하세요."
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Dê um nome a este endpoint para listá-lo."
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Дайте этой конечной точке имя, под которым она будет в списке."
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Đặt tên cho điểm cuối này để hiển thị trong danh sách."
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "给这个端点起个名字，好在列表里认出来。"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "給這個端點一個名稱，好在列表中辨認。"
++          }
++        }
++      }
++    },
++    "Its address, its key and its models are removed from this device." : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "يُزال عنوانه ومفتاحه ونماذجه من هذا الجهاز."
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Adresse, Schlüssel und Modelle werden von diesem Gerät entfernt."
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Se quitarán de este dispositivo su dirección, su clave y sus modelos."
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Son adresse, sa clé et ses modèles sont supprimés de cet appareil."
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Il suo indirizzo, la sua chiave e i suoi modelli vengono rimossi da questo dispositivo."
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "このアドレス、キー、モデルはこのデバイスから削除されます。"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "주소, 키, 모델이 이 기기에서 제거됩니다."
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "O endereço, a chave e os modelos serão removidos deste dispositivo."
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Адрес, ключ и модели будут удалены с этого устройства."
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Địa chỉ, khóa và các mô hình của nó sẽ bị xóa khỏi thiết bị này."
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "它的地址、密钥和模型都会从这台设备上删除。"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "它的位址、金鑰和模型都會從這台裝置上移除。"
++          }
++        }
++      }
++    },
++    "Name Needed" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "الاسم مطلوب"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Name fehlt"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Falta el nombre"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Nom requis"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Nome necessario"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "名前が必要です"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "이름 필요"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Nome necessário"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Нужно имя"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Cần tên"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "需要名称"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "需要名稱"
++          }
++        }
++      }
++    },
++    "Saved — leave empty to keep it" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "محفوظ — اتركه فارغًا للإبقاء عليه"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Gesichert — leer lassen, um ihn zu behalten"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Guardada — déjala vacía para conservarla"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Enregistrée — laissez vide pour la conserver"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Salvata — lascia vuoto per mantenerla"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "保存済み — 空欄のままにすると保持されます"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "저장됨 — 비워 두면 유지됩니다"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Salva — deixe vazio para mantê-la"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Сохранён — оставьте пустым, чтобы сохранить"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Đã lưu — để trống để giữ lại"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "已保存 — 留空即保留"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "已儲存 — 留空即保留"
++          }
++        }
++      }
++    },
++    "The name this site is listed by" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "الاسم الذي يُدرج به هذا الموقع"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Der Name, unter dem diese Seite in der Liste steht"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "El nombre con el que aparece este sitio"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Le nom sous lequel ce site apparaît"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Il nome con cui questo sito è elencato"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "このサイトを一覧に表示する名前"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "이 사이트를 목록에 표시할 이름"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "O nome pelo qual este site é listado"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Имя, под которым этот сайт в списке"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Tên hiển thị của trang này trong danh sách"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "这个站点在列表里显示的名字"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "這個站台在列表中顯示的名稱"
++          }
++        }
++      }
++    },
++    "Unable to Save" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "تعذّر الحفظ"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Sichern nicht möglich"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "No se pudo guardar"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Impossible d'enregistrer"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Impossibile salvare"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "保存できません"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "저장할 수 없음"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Não foi possível salvar"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Не удалось сохранить"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Không lưu được"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "无法保存"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "無法儲存"
++          }
++        }
++      }
+     }
+   },
+   "version" : "1.0"
 diff --git a/Apelind/Dispatch/AgentHandler.swift b/Apelind/Dispatch/AgentHandler.swift
 index 7e2c69d..5be6a8c 100644
 --- a/Apelind/Dispatch/AgentHandler.swift
