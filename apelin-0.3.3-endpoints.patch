@@ -1,5 +1,5 @@
 diff --git a/Apelin/Interface/Chats/ChatController.swift b/Apelin/Interface/Chats/ChatController.swift
-index 3c602c6..fedfe5b 100644
+index 3c602c6..d242d1b 100644
 --- a/Apelin/Interface/Chats/ChatController.swift
 +++ b/Apelin/Interface/Chats/ChatController.swift
 @@ -666,9 +666,11 @@ final class ChatController: UIViewController {
@@ -16,18 +16,27 @@ index 3c602c6..fedfe5b 100644
                                 return UIAction(title: model, state: checked ? .on : .off) { _ in
                                     ComposerModelSelection.current = Self.selection(of: model, in: account)
                                 }
-@@ -690,8 +692,9 @@ extension ChatController {
+@@ -688,10 +690,17 @@ extension ChatController {
+     /// reader's effort and speed are kept apart (`ComposerModelPreferences`),
+     /// so picking a model that lacks them does not lose them.
      private static func selection(of model: String, in account: AgentAccount) -> ComposerModelSelection {
-         ComposerModelSelection(
+-        ComposerModelSelection(
++        // A catalog model keeps the three levels the app has always offered.
++        // An endpoint also offers Off, and starts there: its site may not
++        // use a level at all, so thinking is something the reader turns on
++        // rather than something every message sends.
++        let efforts = account.reasoningEfforts?[model] ?? []
++        let offered = account.id == nil ? efforts.filter { [.low, .high, .max].contains($0) } : efforts
++        return ComposerModelSelection(
              provider: account.provider,
 +            accountID: account.id,
              model: model,
 -            supportedEfforts: (account.reasoningEfforts?[model] ?? []).filter { [.low, .high, .max].contains($0) },
-+            supportedEfforts: (account.reasoningEfforts?[model] ?? []).filter { [.off, .low, .high, .max].contains($0) },
++            supportedEfforts: offered,
              supportedTiers: account.serviceTiers?[model] ?? [],
          )
      }
-@@ -710,7 +713,8 @@ extension ChatController {
+@@ -710,7 +719,8 @@ extension ChatController {
              let accounts = EnabledModels.accounts(from: listed)
              if let current = ComposerModelSelection.current {
                  if let account = accounts.first(where: { account in
@@ -37,7 +46,7 @@ index 3c602c6..fedfe5b 100644
                  }) {
                      let refreshed = Self.selection(of: current.model, in: account)
                      if refreshed != current {
-@@ -718,7 +722,9 @@ extension ChatController {
+@@ -718,7 +728,9 @@ extension ChatController {
                      }
                      return
                  }
@@ -69,7 +78,7 @@ index c0290d3..5e5dbdb 100644
              approvalMode: mode,
              asksBeforeScreen: AgentPermissions.asksBeforeScreen,
 diff --git a/Apelin/Interface/Chats/Composer/ComposerModelSelection.swift b/Apelin/Interface/Chats/Composer/ComposerModelSelection.swift
-index a9af944..cae1b51 100644
+index a9af944..5759e72 100644
 --- a/Apelin/Interface/Chats/Composer/ComposerModelSelection.swift
 +++ b/Apelin/Interface/Chats/Composer/ComposerModelSelection.swift
 @@ -13,6 +13,9 @@ extension Notification.Name {
@@ -82,10 +91,12 @@ index a9af944..cae1b51 100644
      var model: String
      /// The last catalog snapshot, so the effort control also restores offline.
      var supportedEfforts: [AgentReasoningEffort]
-@@ -20,6 +23,20 @@ struct ComposerModelSelection: Codable, Equatable {
+@@ -20,12 +23,31 @@ struct ComposerModelSelection: Codable, Equatable {
      /// selection saved before there were any.
      var supportedTiers: [AgentServiceTier]?
  
+-    /// The effort sent: the reader's where the model offers it, else High,
+-    /// else its strongest; nil for a model that offers none.
 +    init(
 +        provider: AgentProvider,
 +        accountID: String? = nil,
@@ -100,9 +111,20 @@ index a9af944..cae1b51 100644
 +        self.supportedTiers = supportedTiers
 +    }
 +
-     /// The effort sent: the reader's where the model offers it, else High,
-     /// else its strongest; nil for a model that offers none.
++    /// The effort sent: the reader's where the model offers it, else Off
++    /// where the model offers it — an endpoint, which starts with thinking
++    /// left out — else High, else its strongest; nil for a model that offers
++    /// none.
      var effort: AgentReasoningEffort? {
+         if let chosen = ComposerModelPreferences.effort, supportedEfforts.contains(chosen) {
+             return chosen
+         }
++        if supportedEfforts.contains(.off) {
++            return .off
++        }
+         return supportedEfforts.contains(.high) ? .high : supportedEfforts.last
+     }
+ 
 diff --git a/Apelin/Interface/Chats/Composer/ComposerView.swift b/Apelin/Interface/Chats/Composer/ComposerView.swift
 index 4a5e442..1cf078f 100644
 --- a/Apelin/Interface/Chats/Composer/ComposerView.swift
@@ -3176,7 +3198,7 @@ index 2aca82f..6658136 100644
  
  /// Credentials delivered by the app for this session, held in memory only.
 diff --git a/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift b/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift
-index 6c39d90..469bbf1 100644
+index 6c39d90..467390f 100644
 --- a/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift
 +++ b/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift
 @@ -10,8 +10,10 @@ public enum ProviderConfiguration: Sendable, Hashable, Codable {
@@ -3211,7 +3233,7 @@ index 6c39d90..469bbf1 100644
          case let .stored(_, model): model
          case let .registered(model): model.id
          }
-@@ -78,12 +81,26 @@ enum ProviderResolver {
+@@ -78,18 +81,46 @@ enum ProviderResolver {
              }
              preconditionFailure("unreachable")
          }
@@ -3240,6 +3262,27 @@ index 6c39d90..469bbf1 100644
              manager: manager,
              modelOverride: configuration.modelID,
          ) else {
+             throw ProviderResolutionError.missingCredentials(storeID)
+         }
+-        return ResolvedProvider(model: resolved.model, authResolver: resolved.authResolver, credentials: stored)
++        var model = resolved.model
++        if CredentialProviderID.isEndpoint(storeID) {
++            // kwwk builds an endpoint's model with thinking off, because its
++            // catalogue cannot know what a site serves, and its request
++            // builder sends a level only for a model that reasons. Say it
++            // does — a level is still sent only when the reader picks one —
++            // and keep the system role a relay's upstream understands.
++            model.reasoning = true
++            var compat = model.compat ?? ModelCompat()
++            compat.supportsReasoningEffort = true
++            compat.supportsDeveloperRole = false
++            compat.thinkingFormat = model.baseURL.lowercased().contains("deepseek.com") ? "deepseek" : "openai"
++            model.compat = compat
++        }
++        return ResolvedProvider(model: model, authResolver: resolved.authResolver, credentials: stored)
+     }
+ 
+     /// The stored sign-in `configuration` needs, nil for one that needs
 diff --git a/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderRegistration.swift b/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderRegistration.swift
 index cba50af..417f0bb 100644
 --- a/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderRegistration.swift
