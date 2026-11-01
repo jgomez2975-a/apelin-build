@@ -1346,6 +1346,37 @@ index 8af8560..d9d725f 100644
                  self?.load()
              } catch {
                  self?.presentNotice(title: "Unable to Sign Out", message: error.readableMessage)
+diff --git a/Apelin/Interface/Settings/Memory/MemoriesController.swift b/Apelin/Interface/Settings/Memory/MemoriesController.swift
+index 8be3626..02fa8d8 100644
+--- a/Apelin/Interface/Settings/Memory/MemoriesController.swift
++++ b/Apelin/Interface/Settings/Memory/MemoriesController.swift
+@@ -1,4 +1,5 @@
+ import ApelinCore
++import Dog
+ import UIKit
+ 
+ final class MemoriesController: TableController {
+@@ -109,7 +110,19 @@ final class MemoriesController: TableController {
+             } catch {
+                 guard !Task.isCancelled, let self else { return }
+                 refreshControl?.endRefreshing()
+-                presentNotice(title: "Unable to Load Memories", message: "Pull down to try again.")
++                // The store repairs what it can before it gives up, so a
++                // failure here is worth naming: the journal keeps the reason
++                // and the alert shows it, and a report can say which file the
++                // disk refused rather than only that the screen is empty.
++                Dog.shared.join(
++                    "Memories",
++                    "read failed: \(String(reflecting: error)) at \(AppJournal.redaction.redacted(DataFolder.app.root.path))",
++                    level: .error,
++                )
++                presentNotice(
++                    title: "Unable to Load Memories",
++                    message: String(localized: "Pull down to try again.") + "\n\n" + String(describing: error),
++                )
+             }
+         }
+     }
 diff --git a/Apelin/Interface/Settings/SettingsViewController.swift b/Apelin/Interface/Settings/SettingsViewController.swift
 index c27e079..5740beb 100644
 --- a/Apelin/Interface/Settings/SettingsViewController.swift
@@ -3632,6 +3663,265 @@ index 844e056..8aece9c 100644
          guard let catalog = catalogKey(provider, credentials: credentials) else { return [:] }
          return Dictionary(uniqueKeysWithValues: ModelsCatalog.models(for: catalog).filter(\.reasoning).map { model in
              (model.id, supportedThinkingLevels(model).compactMap { AgentReasoningEffort(rawValue: $0.rawValue) })
+diff --git a/Packages/ApelinKit/Sources/ApelinCore/MemoryStore.swift b/Packages/ApelinKit/Sources/ApelinCore/MemoryStore.swift
+index 968018f..dbf1607 100644
+--- a/Packages/ApelinKit/Sources/ApelinCore/MemoryStore.swift
++++ b/Packages/ApelinKit/Sources/ApelinCore/MemoryStore.swift
+@@ -35,10 +35,18 @@ public enum MemoryStoreError: Error, Equatable {
+ /// One disk authority shared by the app and every agent process. No cached
+ /// snapshot is ever written back: every mutation locks, rereads and compares
+ /// the supplied revision, including creations after a user deleted a record.
++///
++/// A store this user cannot read is repaired once and reread (`read`): the
++/// folder is made when a restore removed it, a lock another user left behind
++/// is set aside, and a data file that does not read back is renamed beside
++/// itself rather than deleted. A memory screen that never opens can only be
++/// reported, never used.
+ public struct MemoryStore: Sendable {
+     public static let maximumRecords = 64
+     public static let maximumContentBytes = 32768
+     private static let maximumFileBytes = 262_144
++    private static let dataName = "memories.json"
++    private static let lockName = "memories.lock"
+     private let root: URL
+ 
+     public init(root: URL) {
+@@ -46,7 +54,20 @@ public struct MemoryStore: Sendable {
+     }
+ 
+     public func read() throws -> MemorySnapshot {
+-        try locked { directory in try read(in: directory) }
++        do {
++            return try locked { directory in try read(in: directory) }
++        } catch {
++            // Nothing could be put right — the folder is gone and cannot be
++            // made, or the disk refuses both the file and its replacement.
++            // The first failure is the one worth reporting.
++            let failure = error
++            do {
++                try repair()
++            } catch {
++                throw failure
++            }
++            return try locked { directory in try read(in: directory) }
++        }
+     }
+ 
+     @discardableResult
+@@ -116,28 +137,193 @@ public struct MemoryStore: Sendable {
+         }
+     }
+ 
++    /// The folder the store lives in, made one level at a time. The package
++    /// makes it at install time, so it is there for every install that kept
++    /// its data; a restore, a person with a file manager or a bootstrap that
++    /// moved can take it away, and the screen then has nowhere to read from.
++    /// A level above the last may be reachable through a link (roothide's
++    /// jbroot is), the folder itself may not: it is the one the reads open.
++    private func ensureRoot() throws {
++        let components = CanonicalPath.components(root.path)
++        var path = ""
++        for (index, component) in components.enumerated() {
++            path += "/" + component
++            var info = stat()
++            let found: Int32
++            if index == components.count - 1 {
++                found = lstat(path, &info)
++            } else {
++                found = stat(path, &info)
++            }
++            if found == 0 {
++                guard info.st_mode & S_IFMT == S_IFDIR else { throw MemoryStoreError.unsafeFile }
++                continue
++            }
++            guard errno == ENOENT else { throw posixError() }
++            guard mkdir(path, 0o755) == 0 || errno == EEXIST else { throw posixError() }
++        }
++    }
++
+     private func locked<T>(_ operation: (Int32) throws -> T) throws -> T {
+-        guard let canonical = CanonicalPath.resolve(root.path) else { throw MemoryStoreError.unsafeFile }
++        let directory = try openDirectory()
++        defer { close(directory) }
++        let lock = openLock(in: directory)
++        defer {
++            if let lock {
++                flock(lock, LOCK_UN)
++                close(lock)
++            }
++        }
++        return try operation(directory)
++    }
++
++    /// The store's own directory, held against `lstat` so that the descriptor
++    /// is the folder the checks were made about and not a link's target.
++    ///
++    /// The path as spelled opens first. `realpath(3)` answers in the system's
++    /// namespace, which under a bootstrap (roothide's jbroot) is not always the
++    /// folder the app's own bundle and the package share — the journal and the
++    /// console already derive mobile's home from the bundle path for the same
++    /// reason.
++    private func openDirectory() throws -> Int32 {
++        try ensureRoot()
+         var info = stat()
+         guard lstat(root.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else { throw MemoryStoreError.unsafeFile }
+-        let directory = open(canonical, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
++        var directory = open(root.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
++        if directory < 0, let canonical = CanonicalPath.resolve(root.path) {
++            directory = open(canonical, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
++        }
+         guard directory >= 0 else { throw posixError() }
+-        defer { close(directory) }
+         var opened = stat()
+         guard fstat(directory, &opened) == 0, info.st_dev == opened.st_dev, info.st_ino == opened.st_ino else {
++            close(directory)
+             throw MemoryStoreError.unsafeFile
+         }
+-        let lock = openat(directory, "memories.lock", O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
+-        guard lock >= 0 else { throw posixError() }
+-        defer { close(lock) }
+-        try checkRegular(lock)
+-        guard flock(lock, LOCK_EX) == 0 else { throw posixError() }
+-        defer { flock(lock, LOCK_UN) }
+-        return try operation(directory)
++        return directory
++    }
++
++    /// An exclusive lock on the store, or nil when this user cannot have one:
++    /// a lock file another user left behind, or one that is not a regular
++    /// file of ours. The operation then runs unlocked rather than the screen
++    /// refusing to open — `repair` sets a foreign lock aside at the first
++    /// failure, so the unlocked state is one read long, and two writes that
++    /// raced in it could lose one where a lock would have refused it.
++    private func openLock(in directory: Int32) -> Int32? {
++        for name in [Self.lockName, "memories-\(geteuid()).lock"] {
++            let descriptor = openat(directory, name, O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, 0o600)
++            guard descriptor >= 0 else { continue }
++            guard (try? checkRegular(descriptor)) != nil, flock(descriptor, LOCK_EX) == 0 else {
++                close(descriptor)
++                continue
++            }
++            return descriptor
++        }
++        return nil
++    }
++
++    /// What a data file holds, as far as this user can tell.
++    private enum Content {
++        /// No file at all: a store nobody has written to yet.
++        case missing
++        /// There, and this user may not open it.
++        case unreadable
++        /// Open, and what is in it is not a memory library this build knows.
++        case broken
++        /// Open, decoded, and reduced to the records worth keeping.
++        case sound([MemoryRecord])
++    }
++
++    /// Puts the store back into a state this user can read, keeping every byte
++    /// that was there. The lock is removed when it is not ours; data that
++    /// decodes but whose file is not ours is written back through a temporary
++    /// file and a rename, which makes it ours; data that does not read back is
++    /// renamed beside itself, `memories.<id>.json`, before the screen starts
++    /// from empty. Nothing here follows a link or deletes a record.
++    private func repair() throws {
++        let directory = try openDirectory()
++        defer { close(directory) }
++
++        var lockInfo = stat()
++        if fstatat(directory, Self.lockName, &lockInfo, AT_SYMLINK_NOFOLLOW) == 0 {
++            let usable = lockInfo.st_mode & S_IFMT == S_IFREG
++                && lockInfo.st_nlink == 1
++                && lockInfo.st_uid == geteuid()
++                && lockInfo.st_mode & 0o022 == 0
++            if !usable {
++                _ = unlinkat(directory, Self.lockName, 0)
++            }
++        }
++
++        switch content(in: directory) {
++        case .missing:
++            return
++        case let .sound(records):
++            try write(MemorySnapshot(revision: UUID().uuidString.lowercased(), records: records), in: directory)
++        case .broken, .unreadable:
++            try moveAside(Self.dataName, in: directory)
++        }
++    }
++
++    private func content(in directory: Int32) -> Content {
++        let descriptor = openat(directory, Self.dataName, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
++        guard descriptor >= 0 else { return errno == ENOENT ? .missing : .unreadable }
++        defer { close(descriptor) }
++        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
++        guard let data = try? handle.read(upToCount: Self.maximumFileBytes + 1),
++              data.count <= Self.maximumFileBytes
++        else {
++            return .broken
++        }
++        if let snapshot = try? JSONDecoder().decode(MemorySnapshot.self, from: data) {
++            let records = sanitized(snapshot.records)
++            return records.isEmpty && !snapshot.records.isEmpty ? .broken : .sound(records)
++        }
++        // An older library, a bare array of records: what the store held
++        // before the revision was written beside them.
++        if let records = try? JSONDecoder().decode([MemoryRecord].self, from: data) {
++            let kept = sanitized(records)
++            return kept.isEmpty && !records.isEmpty ? .broken : .sound(kept)
++        }
++        return .broken
++    }
++
++    /// The records that can be kept: a good id, a title on one line, text, and
++    /// no more than the library holds. What breaks a rule is dropped, not the
++    /// whole library with it.
++    private func sanitized(_ records: [MemoryRecord]) -> [MemoryRecord] {
++        var seen = Set<String>()
++        var kept: [MemoryRecord] = []
++        var bytes = 0
++        for record in records where kept.count < Self.maximumRecords {
++            let title = record.title.trimmingCharacters(in: .whitespacesAndNewlines)
++            let body = record.body.trimmingCharacters(in: .whitespacesAndNewlines)
++            guard UUID(uuidString: record.id) != nil, seen.insert(record.id).inserted,
++                  !title.isEmpty, !body.isEmpty,
++                  !title.contains(where: \.isNewline),
++                  !title.utf8.contains(0), !body.utf8.contains(0),
++                  record.projectID.map({ !$0.isEmpty && $0.utf8.count <= 255 && !$0.utf8.contains(0) }) ?? true
++            else {
++                continue
++            }
++            let cost = title.utf8.count + body.utf8.count
++            guard bytes + cost <= Self.maximumContentBytes else { continue }
++            bytes += cost
++            kept.append(MemoryRecord(id: record.id, title: title, body: body, projectID: record.projectID))
++        }
++        return kept
++    }
++
++    /// Renames a file beside itself, never to a name a read looks at and never
++    /// following a link: whoever comes looking for the old library finds it
++    /// there, and this build starts from empty instead of staying shut.
++    private func moveAside(_ name: String, in directory: Int32) throws {
++        let stem = name.hasSuffix(".json") ? String(name.dropLast(5)) : name
++        let destination = "\(stem).\(UUID().uuidString.lowercased()).json"
++        guard renameat(directory, name, directory, destination) == 0 else { throw posixError() }
+     }
+ 
+     private func read(in directory: Int32) throws -> MemorySnapshot {
+-        let descriptor = openat(directory, "memories.json", O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
++        let descriptor = openat(directory, Self.dataName, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+         if descriptor < 0 {
+             if errno == ENOENT {
+                 return MemorySnapshot(revision: "empty", records: [])
+@@ -166,7 +352,7 @@ public struct MemoryStore: Sendable {
+         defer { close(descriptor); unlinkat(directory, temporary, 0) }
+         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+         try handle.write(contentsOf: data)
+-        guard fsync(descriptor) == 0, renameat(directory, temporary, directory, "memories.json") == 0, fsync(directory) == 0 else { throw posixError() }
++        guard fsync(descriptor) == 0, renameat(directory, temporary, directory, Self.dataName) == 0, fsync(directory) == 0 else { throw posixError() }
+     }
+ 
+     private func checkRegular(_ descriptor: Int32) throws {
 diff --git a/Packages/ApelinKit/Sources/ApelinProtocol/AppOperation.swift b/Packages/ApelinKit/Sources/ApelinProtocol/AppOperation.swift
 index 598ec88..c020f72 100644
 --- a/Packages/ApelinKit/Sources/ApelinProtocol/AppOperation.swift
@@ -3928,6 +4218,68 @@ index d42e3f9..52af45a 100644
          case .distributionRepositoryList:
              return Row(reply: DistributionRepositoryListResponse()) { _ = try await $0.distributionRepositoryList() }
          case .distributionRepositoryCreate:
+diff --git a/Packages/ApelinKit/Tests/ApelinCoreTests/MemoryStoreTests.swift b/Packages/ApelinKit/Tests/ApelinCoreTests/MemoryStoreTests.swift
+index 046eff1..6737541 100644
+--- a/Packages/ApelinKit/Tests/ApelinCoreTests/MemoryStoreTests.swift
++++ b/Packages/ApelinKit/Tests/ApelinCoreTests/MemoryStoreTests.swift
+@@ -57,28 +57,44 @@ final class MemoryStoreTests: XCTestCase {
+         XCTAssertEqual(try MemoryStore(root: root).read().records.count, 1)
+     }
+ 
+-    func testRejectsUnsafeFilesAndKeepsCorruptData() throws {
++    func testRepairsWhatItCannotReadAndKeepsEveryByte() throws {
+         let root = try temporaryDirectory()
+         defer { try? FileManager.default.removeItem(at: root) }
+         let outside = root.appendingPathComponent("outside.json")
+         let file = root.appendingPathComponent("memories.json")
++        let lock = root.appendingPathComponent("memories.lock")
++        let store = MemoryStore(root: root)
+         try Data("secret".utf8).write(to: outside)
++
++        // A link at the data file is set aside, never followed: the screen
++        // opens empty and the file it pointed at is untouched.
+         try FileManager.default.createSymbolicLink(at: file, withDestinationURL: outside)
+-        let store = MemoryStore(root: root)
+-        XCTAssertThrowsError(try store.read())
++        XCTAssertTrue(try store.read().records.isEmpty)
+         XCTAssertEqual(try String(contentsOf: outside), "secret")
+-        try FileManager.default.removeItem(at: file)
++        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
++
++        // A second name for a file elsewhere, and bytes no decoder knows, are
++        // renamed beside the store rather than deleted.
+         try FileManager.default.linkItem(at: outside, to: file)
+-        XCTAssertThrowsError(try store.read())
+-        try FileManager.default.removeItem(at: file)
++        XCTAssertTrue(try store.read().records.isEmpty)
++        XCTAssertEqual(try String(contentsOf: outside), "secret")
+         try Data("broken".utf8).write(to: file)
+-        XCTAssertThrowsError(try store.read())
+-        XCTAssertThrowsError(try store.save(MemoryRecord(title: "New", body: "Text"), revision: "empty"))
+-        XCTAssertEqual(try String(contentsOf: file), "broken")
+-        try FileManager.default.removeItem(at: file)
+-        try FileManager.default.removeItem(at: root.appendingPathComponent("memories.lock"))
+-        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("memories.lock"), withDestinationURL: outside)
+-        XCTAssertThrowsError(try store.read())
++        XCTAssertTrue(try store.read().records.isEmpty)
++        let kept = try FileManager.default.contentsOfDirectory(atPath: root.path)
++            .filter { $0.hasPrefix("memories.") && $0.hasSuffix(".json") }
++        XCTAssertEqual(kept.count, 3)
++        XCTAssertEqual(kept.filter { (try? String(contentsOf: root.appendingPathComponent($0))) == "broken" }.count, 1)
++
++        // A lock that is a link, or not a regular file at all, is no reason to
++        // refuse the library: the store takes the lock it can have.
++        try FileManager.default.removeItem(at: lock)
++        try FileManager.default.createSymbolicLink(at: lock, withDestinationURL: outside)
++        let record = MemoryRecord(title: "New", body: "Text")
++        XCTAssertEqual(try store.save(record, revision: store.read().revision).records, [record])
++        XCTAssertEqual(try String(contentsOf: outside), "secret")
++        try FileManager.default.removeItem(at: lock)
++        try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
++        XCTAssertEqual(try MemoryStore(root: root).read().records, [record])
+     }
+ 
+     func testLongMemoryPersistsWithoutPerRecordCharacterLimits() throws {
 diff --git a/build-skin.sh b/build-skin.sh
 new file mode 100644
 index 0000000..c7e33d6
