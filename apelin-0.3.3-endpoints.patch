@@ -665,10 +665,10 @@ index dd8ceed..464b995 100644
          }
 diff --git a/Apelin/Interface/Settings/Accounts/EndpointFormController.swift b/Apelin/Interface/Settings/Accounts/EndpointFormController.swift
 new file mode 100644
-index 0000000..cac3bdb
+index 0000000..57ad431
 --- /dev/null
 +++ b/Apelin/Interface/Settings/Accounts/EndpointFormController.swift
-@@ -0,0 +1,338 @@
+@@ -0,0 +1,372 @@
 +import ApelinProtocol
 +import UIKit
 +
@@ -688,6 +688,7 @@ index 0000000..cac3bdb
 +        case apiKey
 +        case models
 +        case contextWindow
++        case images
 +
 +        var heading: String {
 +            switch self {
@@ -696,6 +697,7 @@ index 0000000..cac3bdb
 +            case .apiKey: String(localized: "API Key")
 +            case .models: String(localized: "Models")
 +            case .contextWindow: String(localized: "Context Window")
++            case .images: String(localized: "Image Input")
 +            }
 +        }
 +
@@ -708,12 +710,16 @@ index 0000000..cac3bdb
 +            case .apiKey: "sk-…"
 +            case .models: "gpt-4o, claude-sonnet-4-5"
 +            case .contextWindow: "131072"
++            case .images: ""
 +            }
 +        }
 +
 +        /// The number of tokens a request may carry. Nil means the site's
 +        /// own limit, which is what an endpoint had before this field.
 +        var isTokens: Bool { self == .contextWindow }
++
++        /// A switch rather than a line to type on.
++        var isSwitch: Bool { self == .images }
 +    }
 +
 +    private enum Row: Hashable {
@@ -744,6 +750,25 @@ index 0000000..cac3bdb
 +        return cell
 +    }()
 +
++    /// Pictures on or off for this site. On unless the endpoint was saved
++    /// with them off, which is what a site serving a vision model wants.
++    private lazy var imagesSwitch: UISwitch = {
++        let toggle = UISwitch()
++        toggle.isOn = account?.endpoint?.images ?? true
++        toggle.accessibilityLabel = Field.images.heading
++        return toggle
++    }()
++
++    private lazy var imagesCell: UITableViewCell = {
++        let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
++        var content = UIListContentConfiguration.cell()
++        content.text = String(localized: "Read pictures")
++        cell.contentConfiguration = content
++        cell.accessoryView = imagesSwitch
++        cell.selectionStyle = .none
++        return cell
++    }()
++
 +    /// `account` is the endpoint being edited; nil adds one.
 +    init(account: AgentAccount? = nil) {
 +        self.account = account
@@ -764,11 +789,16 @@ index 0000000..cac3bdb
 +        tableView.estimatedRowHeight = 52
 +        dataSource.headerTitle = { $0.heading }
 +        dataSource.footerTitle = { field in
-+            field.isTokens
-+                ? String(localized: "The tokens this site takes in one request. Leave it empty to use the default.")
-+                : nil
++            switch field {
++            case .contextWindow:
++                String(localized: "The tokens this site takes in one request. Leave it empty to use the default.")
++            case .images:
++                String(localized: "Send pictures from this chat, and pictures tools take, to this site’s models. Turn it off for a site whose models take text only.")
++            default:
++                nil
++            }
 +        }
-+        for field in Field.allCases {
++        for field in Field.allCases where !field.isSwitch {
 +            let input = input(for: field)
 +            input.accessibilityLabel = field.heading
 +            input.returnKeyType = field == .contextWindow ? .done : .next
@@ -817,6 +847,8 @@ index 0000000..cac3bdb
 +            input.text = (account?.endpoint?.models ?? account?.models ?? []).joined(separator: ", ")
 +        case .contextWindow:
 +            input.text = account?.endpoint?.contextWindow.map(String.init)
++        case .images:
++            break
 +        }
 +        return input
 +    }
@@ -840,7 +872,7 @@ index 0000000..cac3bdb
 +
 +    private func cell(for row: Row) -> UITableViewCell? {
 +        switch row {
-+        case let .field(field): return cells[field]
++        case let .field(field): return field.isSwitch ? imagesCell : cells[field]
 +        case .fetch: return fetchCell
 +        }
 +    }
@@ -858,12 +890,13 @@ index 0000000..cac3bdb
 +
 +    private func advance(from field: Field) {
 +        guard let index = Field.allCases.firstIndex(of: field),
-+              index + 1 < Field.allCases.count
++              index + 1 < Field.allCases.count,
++              let next = fields[Field.allCases[index + 1]]
 +        else {
 +            view.endEditing(true)
 +            return
 +        }
-+        fields[Field.allCases[index + 1]]?.becomeFirstResponder()
++        next.becomeFirstResponder()
 +    }
 +
 +    // MARK: - Reading the site's models
@@ -979,6 +1012,7 @@ index 0000000..cac3bdb
 +                    defaultModel: account?.endpoint?.defaultModel,
 +                    models: models,
 +                    contextWindow: window,
++                    images: imagesSwitch.isOn,
 +                ))
 +                // A new endpoint arrives with its models on, so it is in the
 +                // composer at once; one that already has picks keeps them.
@@ -1139,7 +1173,7 @@ index 167681c..878a853 100644
      }
  }
 diff --git a/Apelin/Interface/Settings/Accounts/ModelProvidersController.swift b/Apelin/Interface/Settings/Accounts/ModelProvidersController.swift
-index 8af8560..d9d725f 100644
+index 8af8560..fbcbfd4 100644
 --- a/Apelin/Interface/Settings/Accounts/ModelProvidersController.swift
 +++ b/Apelin/Interface/Settings/Accounts/ModelProvidersController.swift
 @@ -9,12 +9,14 @@ import UIKit
@@ -1213,7 +1247,7 @@ index 8af8560..d9d725f 100644
          content.textProperties.numberOfLines = 1
          content.image = account.provider.icon
          content.imageProperties.maximumSize = CGSize(width: 29, height: 29)
-@@ -213,6 +224,19 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+@@ -213,8 +224,26 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
          return cell
      }
  
@@ -1232,8 +1266,15 @@ index 8af8560..d9d725f 100644
 +
      private static func signedInLine(_ account: AgentAccount) -> String {
          var parts = [account.account ?? String(localized: "Signed In")]
++        if let endpoint = account.endpoint {
++            // What this site's models are sent: a name on its own says
++            // nothing about whether a picture will reach them.
++            parts.append(endpoint.images ? String(localized: "Text · Images") : String(localized: "Text Only"))
++        }
          if let expiresAt = account.expiresAt {
-@@ -236,7 +260,32 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+             let date = expiresAt.formatted(date: .abbreviated, time: .shortened)
+             parts.append(expiresAt < Date() ? String(localized: "Expired \(date)") : String(localized: "Until \(date)"))
+@@ -236,7 +265,32 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
      }
  
      private func accountActions(_ account: AgentAccount) -> [UIMenuElement] {
@@ -1267,7 +1308,7 @@ index 8af8560..d9d725f 100644
              UIAction(
                  title: String(localized: "Edit"),
                  image: UIImage(systemName: account.isAPIKeyAccount ? "pencil" : "arrow.clockwise"),
-@@ -255,14 +304,15 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+@@ -255,14 +309,15 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
                      image: UIImage(systemName: "rectangle.portrait.and.arrow.right"),
                      attributes: .destructive,
                  ) { [weak self] _ in
@@ -1285,7 +1326,7 @@ index 8af8560..d9d725f 100644
      }
  
      override func tableView(
-@@ -270,7 +320,7 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+@@ -270,7 +325,7 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
          contextMenuConfigurationForRowAt indexPath: IndexPath,
          point _: CGPoint,
      ) -> UIContextMenuConfiguration? {
@@ -1294,7 +1335,7 @@ index 8af8560..d9d725f 100644
          return UIContextMenuConfiguration(actionProvider: { [weak self] _ in
              UIMenu(children: self?.accountActions(account) ?? [])
          })
-@@ -278,12 +328,29 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+@@ -278,12 +333,29 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
  
      override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
          tableView.deselectRow(at: indexPath, animated: true)
@@ -1325,7 +1366,7 @@ index 8af8560..d9d725f 100644
      private func signIn(_ account: AgentAccount) {
          let page = ProviderLoginController(account: account)
          page.onFinish = { [weak self] in self?.load() }
-@@ -293,22 +360,38 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
+@@ -293,22 +365,38 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
          presentPageAsFormSheet(page)
      }
  
@@ -1449,10 +1490,10 @@ index c27e079..5740beb 100644
          if case .version = dataSource.value(at: indexPath)?.row {
              return false
 diff --git a/Apelin/Resources/Localizable.xcstrings b/Apelin/Resources/Localizable.xcstrings
-index c310329..a253bf5 100644
+index c310329..67dcc0a 100644
 --- a/Apelin/Resources/Localizable.xcstrings
 +++ b/Apelin/Resources/Localizable.xcstrings
-@@ -78648,6 +78648,2087 @@
+@@ -78648,6 +78648,2502 @@
            }
          }
        }
@@ -3537,6 +3578,421 @@ index c310329..a253bf5 100644
 +          }
 +        }
 +      }
++    },
++    "Image Input" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "إدخال الصور"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Bildeingabe"
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Image Input"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Entrada de imágenes"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Entrée d’images"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Input di immagini"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "画像入力"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "이미지 입력"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Entrada de imagens"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Ввод изображений"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Nhập hình ảnh"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "图片输入"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "圖片輸入"
++          }
++        }
++      }
++    },
++    "Read pictures" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "قراءة الصور"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Bilder lesen"
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Read pictures"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Leer imágenes"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Lire les images"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Leggi le immagini"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "画像を読み取る"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "이미지 읽기"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Ler imagens"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Читать изображения"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Đọc hình ảnh"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "读取图片"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "讀取圖片"
++          }
++        }
++      }
++    },
++    "Send pictures from this chat, and pictures tools take, to this site’s models. Turn it off for a site whose models take text only." : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "أرسل الصور من هذه المحادثة، والصور التي تلتقطها الأدوات، إلى نماذج هذا الموقع. أوقف ذلك لموقع تقبل نماذجه النص فقط."
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Schickt Bilder aus diesem Chat und Bilder, die Werkzeuge aufnehmen, an die Modelle dieser Website. Schalte es für eine Website aus, deren Modelle nur Text annehmen."
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Send pictures from this chat, and pictures tools take, to this site’s models. Turn it off for a site whose models take text only."
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Envía a los modelos de este sitio las imágenes de este chat y las que capturan las herramientas. Desactívalo para un sitio cuyos modelos solo aceptan texto."
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Envoie aux modèles de ce site les images de cette conversation et celles capturées par les outils. Désactivez-le pour un site dont les modèles n’acceptent que du texte."
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Invia ai modelli di questo sito le immagini di questa chat e quelle catturate dagli strumenti. Disattivalo per un sito i cui modelli accettano solo testo."
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "このチャットの画像とツールが取得した画像を、このサイトのモデルに送ります。テキストのみを受け付けるモデルのサイトではオフにしてください。"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "이 채팅의 이미지와 도구가 캡처한 이미지를 이 사이트의 모델로 보냅니다. 텍스트만 받는 모델을 쓰는 사이트에서는 끄세요."
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Envia aos modelos deste site as imagens deste chat e as capturadas pelas ferramentas. Desative para um site cujos modelos aceitam apenas texto."
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Отправляет моделям этого сайта изображения из этого чата и снимки, сделанные инструментами. Отключите для сайта, модели которого принимают только текст."
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Gửi hình ảnh từ cuộc trò chuyện này và hình ảnh do công cụ chụp đến mô hình của trang này. Tắt đi với trang có mô hình chỉ nhận văn bản."
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "把本对话里的图片，以及工具截取的图片，发给这个站点的模型。只收文本的站点请关掉。"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "把本對話裡的圖片，以及工具截取的圖片，發給這個站點的模型。只收文字的站點請關掉。"
++          }
++        }
++      }
++    },
++    "Text · Images" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "نص · صور"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Text · Bilder"
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Text · Images"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Texto · Imágenes"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Texte · Images"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Testo · Immagini"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "テキスト · 画像"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "텍스트 · 이미지"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Texto · Imagens"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Текст · Изображения"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Văn bản · Hình ảnh"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "文本 · 图片"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "文字 · 圖片"
++          }
++        }
++      }
++    },
++    "Text Only" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "نص فقط"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Nur Text"
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Text Only"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Solo texto"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Texte uniquement"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Solo testo"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "テキストのみ"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "텍스트만"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Apenas texto"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Только текст"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Chỉ văn bản"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "仅文本"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "僅文字"
++          }
++        }
++      }
      }
    },
    "version" : "1.0"
@@ -3590,7 +4046,7 @@ index 2aca82f..6658136 100644
  
  /// Credentials delivered by the app for this session, held in memory only.
 diff --git a/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift b/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift
-index 6c39d90..1a49a92 100644
+index 6c39d90..98543ff 100644
 --- a/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift
 +++ b/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift
 @@ -10,8 +10,10 @@ public enum ProviderConfiguration: Sendable, Hashable, Codable {
@@ -3625,7 +4081,7 @@ index 6c39d90..1a49a92 100644
          case let .stored(_, model): model
          case let .registered(model): model.id
          }
-@@ -78,18 +81,67 @@ enum ProviderResolver {
+@@ -78,18 +81,87 @@ enum ProviderResolver {
              }
              preconditionFailure("unreachable")
          }
@@ -3670,6 +4126,15 @@ index 6c39d90..1a49a92 100644
 +            compat.supportsDeveloperRole = false
 +            compat.thinkingFormat = model.baseURL.lowercased().contains("deepseek.com") ? "deepseek" : "openai"
 +            model.compat = compat
++            // kwwk builds an endpoint's model text-only, because an address
++            // says nothing about what the site serves. A model that reads
++            // pictures then never gets one: kwwk replaces a picture with
++            // "(image omitted: model does not support images)" before the
++            // request, so a screenshot the agent just took, and a picture
++            // the reader attached, both arrive as a sentence about a
++            // missing image. The reader's switch is the answer to what the
++            // site takes; it is on unless turned off.
++            model.input = takesImages(in: stored) ? [.text, .image] : [.text]
 +            // kwwk's endpoint model takes 131072 tokens, a number no site
 +            // promised: a relay serving a 64k model then never compacts in
 +            // time, and one serving a 1M model compacts a conversation that
@@ -3682,6 +4147,17 @@ index 6c39d90..1a49a92 100644
 +            }
 +        }
 +        return ResolvedProvider(model: model, authResolver: resolved.authResolver, credentials: stored)
++    }
++
++    /// Whether this endpoint was saved as one that takes pictures. The
++    /// worker writes "0" only when the reader turned them off
++    /// (`EndpointStore.imagesExtra`), so a credential saved before the
++    /// switch existed, or with it on, is sent them.
++    private static func takesImages(in credentials: OAuthCredentials?) -> Bool {
++        guard let extras = credentials?.extras,
++              case let .string(value)? = extras["images"]
++        else { return true }
++        return value != "0"
 +    }
 +
 +    /// The window the reader gave this endpoint, when it is one a session
@@ -3812,10 +4288,10 @@ index 1dad689..e7b177e 100644
          let usesAPIKey = ProviderModels.usesAPIKey(request.provider, credentials: credentials)
 diff --git a/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointStore.swift b/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointStore.swift
 new file mode 100644
-index 0000000..34e0108
+index 0000000..c0415b5
 --- /dev/null
 +++ b/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointStore.swift
-@@ -0,0 +1,231 @@
+@@ -0,0 +1,257 @@
 +import ApelinAgent
 +import ApelinCore
 +import ApelinProtocol
@@ -3837,6 +4313,12 @@ index 0000000..34e0108
 +    /// takes 131072 tokens otherwise, which is wrong for a relay serving a
 +    /// model that reads less, and idles a model that reads more.
 +    static let contextWindowExtra = "contextWindow"
++    /// Whether this site's models take pictures. kwwk hands an endpoint a
++    /// text-only model, so without this a screenshot never leaves the
++    /// device: it is replaced by "(image omitted)" before the request.
++    /// Absent means pictures, which is what a site serving a vision model
++    /// needs and what a reader who saved nothing asked for.
++    static let imagesExtra = "images"
 +    /// A reader may keep plenty; the sign-in screen is not a directory.
 +    static let maximumEndpoints = 64
 +    static let maximumModels = 64
@@ -3852,7 +4334,15 @@ index 0000000..34e0108
 +            models: models(credentials),
 +            hasKey: !credentials.access.isEmpty,
 +            contextWindow: contextWindow(credentials),
++            images: images(credentials),
 +        )
++    }
++
++    /// Whether pictures are sent to this site. Only an endpoint saved with
++    /// them off says no; everything else, including one saved before the
++    /// field existed, is sent them.
++    static func images(_ credentials: OAuthCredentials) -> Bool {
++        string(imagesExtra, in: credentials) != "0"
 +    }
 +
 +    /// The window this endpoint was given, if any. A site keeps it in its
@@ -3922,7 +4412,8 @@ index 0000000..34e0108
 +        model: String?,
 +        models: [String],
 +        key: String,
-+        contextWindow: Int?
++        contextWindow: Int?,
++        images: Bool
 +    ) {
 +        let title = request.title.trimmingCharacters(in: .whitespacesAndNewlines)
 +        guard !title.isEmpty, title.count <= 64 else {
@@ -3970,7 +4461,10 @@ index 0000000..34e0108
 +                )
 +            }
 +        }
-+        return (title, base, model, models, key, request.contextWindow)
++        // A request that says nothing about pictures keeps what the endpoint
++        // was saved with, and pictures for one saved with nothing.
++        let takesImages = request.images ?? existing.map(EndpointStore.images) ?? true
++        return (title, base, model, models, key, request.contextWindow, takesImages)
 +    }
 +
 +    /// Short and readable in a store id; no dashes, so it survives a path
@@ -4030,6 +4524,14 @@ index 0000000..34e0108
 +            credentials.extras[EndpointStore.contextWindowExtra] = .string(String(window))
 +        } else {
 +            credentials.extras.removeValue(forKey: EndpointStore.contextWindowExtra)
++        }
++        // Written only when it is off: an absent extra is pictures, so a
++        // site that takes them keeps a credential kwwk reads as it always
++        // did.
++        if accepted.images {
++            credentials.extras.removeValue(forKey: EndpointStore.imagesExtra)
++        } else {
++            credentials.extras[EndpointStore.imagesExtra] = .string("0")
 +        }
 +        do {
 +            try await store.store(credentials, for: storeID)
@@ -4437,7 +4939,7 @@ index 7cae59f..5181b7d 100644
          self.reasoningEffort = reasoningEffort
          self.serviceTier = serviceTier
 diff --git a/Packages/ApelinKit/Sources/ApelinProtocol/Operations/AgentSignIn.swift b/Packages/ApelinKit/Sources/ApelinProtocol/Operations/AgentSignIn.swift
-index 0c5563c..7bd7f00 100644
+index 0c5563c..e45e78e 100644
 --- a/Packages/ApelinKit/Sources/ApelinProtocol/Operations/AgentSignIn.swift
 +++ b/Packages/ApelinKit/Sources/ApelinProtocol/Operations/AgentSignIn.swift
 @@ -69,6 +69,13 @@ public enum AgentSignInField: String, Codable, Sendable, CaseIterable {
@@ -4538,7 +5040,7 @@ index 0c5563c..7bd7f00 100644
      }
  
      func agentSignIn(provider: AgentProvider, method: AgentSignInMethod? = nil) async throws -> TaskHandle {
-@@ -292,3 +316,94 @@ public extension ApelinService {
+@@ -292,3 +316,105 @@ public extension ApelinService {
          try await send(AgentCredentialImportRequest())
      }
  }
@@ -4558,6 +5060,10 @@ index 0c5563c..7bd7f00 100644
 +    /// The window this site's models are taken to have, when the reader
 +    /// set one. Nil is kwwk's default for an endpoint.
 +    public var contextWindow: Int?
++    /// Whether this site's models are sent pictures. kwwk builds an
++    /// endpoint's model without them, so a site serving a vision model
++    /// otherwise answers a screenshot it never received.
++    public var images: Bool
 +
 +    public init(
 +        id: String,
@@ -4567,6 +5073,7 @@ index 0c5563c..7bd7f00 100644
 +        models: [String] = [],
 +        hasKey: Bool = true,
 +        contextWindow: Int? = nil,
++        images: Bool = true,
 +    ) {
 +        self.id = id
 +        self.title = title
@@ -4575,6 +5082,7 @@ index 0c5563c..7bd7f00 100644
 +        self.models = models
 +        self.hasKey = hasKey
 +        self.contextWindow = contextWindow
++        self.images = images
 +    }
 +}
 +
@@ -4594,6 +5102,9 @@ index 0c5563c..7bd7f00 100644
 +    /// The tokens one request to this site may carry, when the reader knows
 +    /// better than kwwk's endpoint default. Nil keeps the default.
 +    public var contextWindow: Int?
++    /// Whether this site's models take pictures. Nil keeps what the
++    /// endpoint was saved with, and pictures for one saved with nothing.
++    public var images: Bool?
 +
 +    public init(
 +        id: String? = nil,
@@ -4603,6 +5114,7 @@ index 0c5563c..7bd7f00 100644
 +        defaultModel: String? = nil,
 +        models: [String] = [],
 +        contextWindow: Int? = nil,
++        images: Bool? = nil,
 +    ) {
 +        self.id = id
 +        self.title = title
@@ -4611,6 +5123,7 @@ index 0c5563c..7bd7f00 100644
 +        self.defaultModel = defaultModel
 +        self.models = models
 +        self.contextWindow = contextWindow
++        self.images = images
 +    }
 +}
 +
