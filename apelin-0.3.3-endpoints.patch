@@ -665,10 +665,10 @@ index dd8ceed..464b995 100644
          }
 diff --git a/Apelin/Interface/Settings/Accounts/EndpointFormController.swift b/Apelin/Interface/Settings/Accounts/EndpointFormController.swift
 new file mode 100644
-index 0000000..bdd780c
+index 0000000..cac3bdb
 --- /dev/null
 +++ b/Apelin/Interface/Settings/Accounts/EndpointFormController.swift
-@@ -0,0 +1,309 @@
+@@ -0,0 +1,338 @@
 +import ApelinProtocol
 +import UIKit
 +
@@ -687,6 +687,7 @@ index 0000000..bdd780c
 +        case baseURL
 +        case apiKey
 +        case models
++        case contextWindow
 +
 +        var heading: String {
 +            switch self {
@@ -694,6 +695,7 @@ index 0000000..bdd780c
 +            case .baseURL: String(localized: "Address")
 +            case .apiKey: String(localized: "API Key")
 +            case .models: String(localized: "Models")
++            case .contextWindow: String(localized: "Context Window")
 +            }
 +        }
 +
@@ -705,8 +707,13 @@ index 0000000..bdd780c
 +            case .baseURL: "https://…"
 +            case .apiKey: "sk-…"
 +            case .models: "gpt-4o, claude-sonnet-4-5"
++            case .contextWindow: "131072"
 +            }
 +        }
++
++        /// The number of tokens a request may carry. Nil means the site's
++        /// own limit, which is what an endpoint had before this field.
++        var isTokens: Bool { self == .contextWindow }
 +    }
 +
 +    private enum Row: Hashable {
@@ -756,10 +763,15 @@ index 0000000..bdd780c
 +        tableView.rowHeight = UITableView.automaticDimension
 +        tableView.estimatedRowHeight = 52
 +        dataSource.headerTitle = { $0.heading }
++        dataSource.footerTitle = { field in
++            field.isTokens
++                ? String(localized: "The tokens this site takes in one request. Leave it empty to use the default.")
++                : nil
++        }
 +        for field in Field.allCases {
 +            let input = input(for: field)
 +            input.accessibilityLabel = field.heading
-+            input.returnKeyType = field == .models ? .done : .next
++            input.returnKeyType = field == .contextWindow ? .done : .next
 +            input.addAction(UIAction { [weak self] _ in self?.advance(from: field) }, for: .editingDidEndOnExit)
 +            fields[field] = input
 +            cells[field] = cell(containing: input)
@@ -789,7 +801,7 @@ index 0000000..bdd780c
 +        input.clearButtonMode = .whileEditing
 +        input.isSecureTextEntry = field == .apiKey
 +        input.textContentType = field == .baseURL ? .URL : (field == .apiKey ? .password : nil)
-+        input.keyboardType = field == .baseURL ? .URL : .asciiCapable
++        input.keyboardType = field == .baseURL ? .URL : (field.isTokens ? .numbersAndPunctuation : .asciiCapable)
 +        input.placeholder = field.placeholder
 +        switch field {
 +        case .title:
@@ -803,6 +815,8 @@ index 0000000..bdd780c
 +                : Field.apiKey.placeholder
 +        case .models:
 +            input.text = (account?.endpoint?.models ?? account?.models ?? []).joined(separator: ", ")
++        case .contextWindow:
++            input.text = account?.endpoint?.contextWindow.map(String.init)
 +        }
 +        return input
 +    }
@@ -937,6 +951,20 @@ index 0000000..bdd780c
 +            return
 +        }
 +        let key = trimmed(.apiKey)
++        let windowText = trimmed(.contextWindow)
++        let window: Int?
++        if windowText.isEmpty {
++            window = nil
++        } else if let tokens = Int(windowText), (4_096 ... 4_000_000).contains(tokens) {
++            window = tokens
++        } else {
++            presentNotice(
++                title: "Context Window Needed",
++                message: String(localized: "Enter the window in tokens, from 4096 to 4000000, or leave it empty."),
++            )
++            fields[.contextWindow]?.becomeFirstResponder()
++            return
++        }
 +        saving = true
 +        saveItem.isEnabled = false
 +        view.endEditing(true)
@@ -950,6 +978,7 @@ index 0000000..bdd780c
 +                    apiKey: key.isEmpty ? nil : key,
 +                    defaultModel: account?.endpoint?.defaultModel,
 +                    models: models,
++                    contextWindow: window,
 +                ))
 +                // A new endpoint arrives with its models on, so it is in the
 +                // composer at once; one that already has picks keeps them.
@@ -1420,10 +1449,10 @@ index c27e079..5740beb 100644
          if case .version = dataSource.value(at: indexPath)?.row {
              return false
 diff --git a/Apelin/Resources/Localizable.xcstrings b/Apelin/Resources/Localizable.xcstrings
-index c310329..58a8931 100644
+index c310329..a253bf5 100644
 --- a/Apelin/Resources/Localizable.xcstrings
 +++ b/Apelin/Resources/Localizable.xcstrings
-@@ -78648,6 +78648,1755 @@
+@@ -78648,6 +78648,2087 @@
            }
          }
        }
@@ -3176,6 +3205,338 @@ index c310329..58a8931 100644
 +          }
 +        }
 +      }
++    },
++    "Context Window" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "نافذة السياق"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Kontextfenster"
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Context Window"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Ventana de contexto"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Fenêtre de contexte"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Finestra di contesto"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "コンテキストウィンドウ"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "컨텍스트 창"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Janela de contexto"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Окно контекста"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Cửa sổ ngữ cảnh"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "上下文窗口"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "上下文視窗"
++          }
++        }
++      }
++    },
++    "The tokens this site takes in one request. Leave it empty to use the default." : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "عدد الرموز التي يقبلها هذا الموقع في الطلب الواحد. اتركه فارغًا لاستخدام الافتراضي."
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Die Token, die diese Website pro Anfrage annimmt. Leer lassen, um den Standard zu verwenden."
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "The tokens this site takes in one request. Leave it empty to use the default."
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Los tokens que este sitio acepta en una solicitud. Déjalo vacío para usar el valor predeterminado."
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Les jetons que ce site accepte par requête. Laissez vide pour utiliser la valeur par défaut."
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "I token che questo sito accetta per richiesta. Lascia vuoto per usare il valore predefinito."
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "このサイトが 1 回のリクエストで受け付けるトークン数。空欄なら既定値を使います。"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "이 사이트가 요청 한 번에 받는 토큰 수입니다. 비워 두면 기본값을 사용합니다."
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Os tokens que este site aceita por solicitação. Deixe vazio para usar o padrão."
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Сколько токенов этот сайт принимает за один запрос. Оставьте пустым, чтобы использовать значение по умолчанию."
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Số token trang này nhận trong một yêu cầu. Để trống để dùng giá trị mặc định."
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "这个站点单次请求接受的 token 数。留空则使用默认值。"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "這個站點單次請求接受的 token 數。留空則使用預設值。"
++          }
++        }
++      }
++    },
++    "Context Window Needed" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "نافذة السياق مطلوبة"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Kontextfenster erforderlich"
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Context Window Needed"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Se necesita la ventana de contexto"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Fenêtre de contexte requise"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Finestra di contesto richiesta"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "コンテキストウィンドウが必要です"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "컨텍스트 창이 필요합니다"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Janela de contexto necessária"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Требуется окно контекста"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Cần cửa sổ ngữ cảnh"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "需要上下文窗口"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "需要上下文視窗"
++          }
++        }
++      }
++    },
++    "Enter the window in tokens, from 4096 to 4000000, or leave it empty." : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "أدخل النافذة بالرموز، من 4096 إلى 4000000، أو اتركها فارغة."
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Gib das Fenster in Token an, von 4096 bis 4000000, oder lass es leer."
++          }
++        },
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Enter the window in tokens, from 4096 to 4000000, or leave it empty."
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Introduce la ventana en tokens, de 4096 a 4000000, o déjala vacía."
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Saisissez la fenêtre en jetons, de 4096 à 4000000, ou laissez vide."
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Inserisci la finestra in token, da 4096 a 4000000, oppure lascia vuoto."
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "ウィンドウをトークン数で 4096 から 4000000 の範囲で入力するか、空欄にします。"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "창을 토큰 단위로 4096에서 4000000 사이로 입력하거나 비워 두세요."
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Informe a janela em tokens, de 4096 a 4000000, ou deixe vazio."
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Укажите окно в токенах, от 4096 до 4000000, или оставьте пустым."
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Nhập cửa sổ theo token, từ 4096 đến 4000000, hoặc để trống."
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "用 token 数填写窗口，范围 4096 到 4000000，或留空。"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "用 token 數填寫視窗，範圍 4096 到 4000000，或留空。"
++          }
++        }
++      }
      }
    },
    "version" : "1.0"
@@ -3229,7 +3590,7 @@ index 2aca82f..6658136 100644
  
  /// Credentials delivered by the app for this session, held in memory only.
 diff --git a/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift b/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift
-index 6c39d90..467390f 100644
+index 6c39d90..1a49a92 100644
 --- a/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift
 +++ b/Packages/ApelinAgent/Sources/ApelinAgent/Session/ProviderConfiguration.swift
 @@ -10,8 +10,10 @@ public enum ProviderConfiguration: Sendable, Hashable, Codable {
@@ -3264,7 +3625,7 @@ index 6c39d90..467390f 100644
          case let .stored(_, model): model
          case let .registered(model): model.id
          }
-@@ -78,18 +81,46 @@ enum ProviderResolver {
+@@ -78,18 +81,67 @@ enum ProviderResolver {
              }
              preconditionFailure("unreachable")
          }
@@ -3309,8 +3670,29 @@ index 6c39d90..467390f 100644
 +            compat.supportsDeveloperRole = false
 +            compat.thinkingFormat = model.baseURL.lowercased().contains("deepseek.com") ? "deepseek" : "openai"
 +            model.compat = compat
++            // kwwk's endpoint model takes 131072 tokens, a number no site
++            // promised: a relay serving a 64k model then never compacts in
++            // time, and one serving a 1M model compacts a conversation that
++            // still fits. The reader's number, when given, is the one the
++            // session plans with — compaction thresholds and the reply
++            // reserve both follow it.
++            if let window = contextWindow(in: stored) {
++                model.contextWindow = window
++                model.maxTokens = min(model.maxTokens, max(1_024, window / 4))
++            }
 +        }
 +        return ResolvedProvider(model: model, authResolver: resolved.authResolver, credentials: stored)
++    }
++
++    /// The window the reader gave this endpoint, when it is one a session
++    /// can plan with. Unreadable values fall back to kwwk's default rather
++    /// than stopping the chat.
++    private static func contextWindow(in credentials: OAuthCredentials?) -> Int? {
++        guard let extras = credentials?.extras,
++              case let .string(value)? = extras["contextWindow"],
++              let tokens = Int(value), tokens >= 4_096, tokens <= 4_000_000
++        else { return nil }
++        return tokens
      }
  
      /// The stored sign-in `configuration` needs, nil for one that needs
@@ -3430,10 +3812,10 @@ index 1dad689..e7b177e 100644
          let usesAPIKey = ProviderModels.usesAPIKey(request.provider, credentials: credentials)
 diff --git a/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointStore.swift b/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointStore.swift
 new file mode 100644
-index 0000000..f536ff6
+index 0000000..34e0108
 --- /dev/null
 +++ b/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointStore.swift
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,231 @@
 +import ApelinAgent
 +import ApelinCore
 +import ApelinProtocol
@@ -3451,6 +3833,10 @@ index 0000000..f536ff6
 +enum EndpointStore {
 +    static let titleExtra = "title"
 +    static let modelsExtra = "models"
++    /// The context window the reader gave this site. kwwk's endpoint model
++    /// takes 131072 tokens otherwise, which is wrong for a relay serving a
++    /// model that reads less, and idles a model that reads more.
++    static let contextWindowExtra = "contextWindow"
 +    /// A reader may keep plenty; the sign-in screen is not a directory.
 +    static let maximumEndpoints = 64
 +    static let maximumModels = 64
@@ -3465,8 +3851,23 @@ index 0000000..f536ff6
 +            defaultModel: string(AgentSignInField.defaultModel.rawValue, in: credentials),
 +            models: models(credentials),
 +            hasKey: !credentials.access.isEmpty,
++            contextWindow: contextWindow(credentials),
 +        )
 +    }
++
++    /// The window this endpoint was given, if any. A site keeps it in its
++    /// own extra so the credential still reads as one kwwk stores.
++    static func contextWindow(_ credentials: OAuthCredentials) -> Int? {
++        guard case let .string(value)? = credentials.extras[contextWindowExtra],
++              let tokens = Int(value), tokens >= minimumContextWindow
++        else { return nil }
++        return tokens
++    }
++
++    /// Below this a session cannot hold its system prompt and one turn; the
++    /// floor also keeps a typo from making every request too large.
++    static let minimumContextWindow = 4_096
++    static let maximumContextWindow = 4_000_000
 +
 +    static func account(id: String, credentials: OAuthCredentials) -> AgentAccount {
 +        let summary = summary(id: id, credentials: credentials)
@@ -3515,7 +3916,14 @@ index 0000000..f536ff6
 +    static func validated(
 +        _ request: AgentEndpointSaveRequest,
 +        existing: OAuthCredentials?,
-+    ) throws -> (title: String, baseURL: String, model: String?, models: [String], key: String) {
++    ) throws -> (
++        title: String,
++        baseURL: String,
++        model: String?,
++        models: [String],
++        key: String,
++        contextWindow: Int?
++    ) {
 +        let title = request.title.trimmingCharacters(in: .whitespacesAndNewlines)
 +        guard !title.isEmpty, title.count <= 64 else {
 +            throw ApelinError(.badRequest, "Enter a name for this endpoint, 64 characters at most.")
@@ -3551,7 +3959,18 @@ index 0000000..f536ff6
 +        }
 +        let declared = request.defaultModel?.trimmingCharacters(in: .whitespacesAndNewlines)
 +        let model = declared?.isEmpty == false ? declared : models.first
-+        return (title, base, model, models, key)
++        // A window the reader names is the one the session plans with, so a
++        // number that no session could use is refused here rather than made
++        // to fail a request later.
++        if let window = request.contextWindow {
++            guard (minimumContextWindow ... maximumContextWindow).contains(window) else {
++                throw ApelinError(
++                    .badRequest,
++                    "Enter a context window from \(minimumContextWindow) to \(maximumContextWindow) tokens.",
++                )
++            }
++        }
++        return (title, base, model, models, key, request.contextWindow)
 +    }
 +
 +    /// Short and readable in a store id; no dashes, so it survives a path
@@ -3606,6 +4025,11 @@ index 0000000..f536ff6
 +            credentials.extras[AgentSignInField.defaultModel.rawValue] = .string(model)
 +        } else {
 +            credentials.extras.removeValue(forKey: AgentSignInField.defaultModel.rawValue)
++        }
++        if let window = accepted.contextWindow {
++            credentials.extras[EndpointStore.contextWindowExtra] = .string(String(window))
++        } else {
++            credentials.extras.removeValue(forKey: EndpointStore.contextWindowExtra)
 +        }
 +        do {
 +            try await store.store(credentials, for: storeID)
@@ -4013,7 +4437,7 @@ index 7cae59f..5181b7d 100644
          self.reasoningEffort = reasoningEffort
          self.serviceTier = serviceTier
 diff --git a/Packages/ApelinKit/Sources/ApelinProtocol/Operations/AgentSignIn.swift b/Packages/ApelinKit/Sources/ApelinProtocol/Operations/AgentSignIn.swift
-index 0c5563c..0fd8407 100644
+index 0c5563c..7bd7f00 100644
 --- a/Packages/ApelinKit/Sources/ApelinProtocol/Operations/AgentSignIn.swift
 +++ b/Packages/ApelinKit/Sources/ApelinProtocol/Operations/AgentSignIn.swift
 @@ -69,6 +69,13 @@ public enum AgentSignInField: String, Codable, Sendable, CaseIterable {
@@ -4114,7 +4538,7 @@ index 0c5563c..0fd8407 100644
      }
  
      func agentSignIn(provider: AgentProvider, method: AgentSignInMethod? = nil) async throws -> TaskHandle {
-@@ -292,3 +316,84 @@ public extension ApelinService {
+@@ -292,3 +316,94 @@ public extension ApelinService {
          try await send(AgentCredentialImportRequest())
      }
  }
@@ -4131,6 +4555,9 @@ index 0c5563c..0fd8407 100644
 +    public var defaultModel: String?
 +    public var models: [String]
 +    public var hasKey: Bool
++    /// The window this site's models are taken to have, when the reader
++    /// set one. Nil is kwwk's default for an endpoint.
++    public var contextWindow: Int?
 +
 +    public init(
 +        id: String,
@@ -4139,6 +4566,7 @@ index 0c5563c..0fd8407 100644
 +        defaultModel: String? = nil,
 +        models: [String] = [],
 +        hasKey: Bool = true,
++        contextWindow: Int? = nil,
 +    ) {
 +        self.id = id
 +        self.title = title
@@ -4146,6 +4574,7 @@ index 0c5563c..0fd8407 100644
 +        self.defaultModel = defaultModel
 +        self.models = models
 +        self.hasKey = hasKey
++        self.contextWindow = contextWindow
 +    }
 +}
 +
@@ -4162,6 +4591,9 @@ index 0c5563c..0fd8407 100644
 +    public var apiKey: String?
 +    public var defaultModel: String?
 +    public var models: [String]
++    /// The tokens one request to this site may carry, when the reader knows
++    /// better than kwwk's endpoint default. Nil keeps the default.
++    public var contextWindow: Int?
 +
 +    public init(
 +        id: String? = nil,
@@ -4170,6 +4602,7 @@ index 0c5563c..0fd8407 100644
 +        apiKey: String? = nil,
 +        defaultModel: String? = nil,
 +        models: [String] = [],
++        contextWindow: Int? = nil,
 +    ) {
 +        self.id = id
 +        self.title = title
@@ -4177,6 +4610,7 @@ index 0c5563c..0fd8407 100644
 +        self.apiKey = apiKey
 +        self.defaultModel = defaultModel
 +        self.models = models
++        self.contextWindow = contextWindow
 +    }
 +}
 +
