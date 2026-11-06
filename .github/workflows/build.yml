@@ -1,4 +1,6 @@
-# Builds Apelin 0.3.3 with the Minis skin and the multiple-endpoint settings
+# Builds Apelin 0.4.0 with the Minis skin, the multiple-endpoint settings,
+# the self-healing memory store, the per-endpoint context window and pictures,
+# and the balance row.
 # from a patch kept in this repository: the app's own source is fetched from
 # the upstream release at run time, so nothing here is a copy of it.
 #
@@ -47,12 +49,12 @@ jobs:
             brew install "${formulae[@]}"
           fi
 
-      - name: Fetch Apelin 0.3.3 and apply the patch
+      - name: Fetch Apelin 0.4.0 and apply the patch
         shell: bash
         run: |
           set -euo pipefail
           curl -sSL --retry 3 -o apelin.tar.gz \
-            https://codeload.github.com/owngoal-dev/Apelin/tar.gz/refs/tags/v0.3.3
+            https://codeload.github.com/owngoal-dev/Apelin/tar.gz/refs/tags/v0.4.0
           mkdir -p src
           tar xzf apelin.tar.gz -C src --strip-components=1
           cd src
@@ -60,10 +62,10 @@ jobs:
           # its source archive, and `git rev-parse HEAD` fails on a bare
           # `git init`. One commit of the patched tree is what it wants.
           git init -q .
-          git apply --verbose ../apelin-0.3.3-endpoints.patch
+          git apply --verbose ../apelin-0.4.0-endpoints.patch
           git add -A
           git -c user.name="apelin-build" -c user.email="apelin-build@users.noreply.github.com" \
-            commit -qm "Apelin 0.3.3 with the skin and the multiple-endpoint settings"
+            commit -qm "Apelin 0.4.0 with the skin, the endpoints and the balance row"
 
       - name: Build, package and verify the IDE and every extension
         shell: bash
@@ -94,6 +96,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: apelin-0.3.3-endpoints
+          name: apelin-0.4.0-endpoints
           path: out
           if-no-files-found: warn
