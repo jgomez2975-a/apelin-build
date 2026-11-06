@@ -665,7 +665,7 @@ index dd8ceed..464b995 100644
          }
 diff --git a/Apelin/Interface/Settings/Accounts/EndpointFormController.swift b/Apelin/Interface/Settings/Accounts/EndpointFormController.swift
 new file mode 100644
-index 0000000..65da527
+index 0000000..951889a
 --- /dev/null
 +++ b/Apelin/Interface/Settings/Accounts/EndpointFormController.swift
 @@ -0,0 +1,499 @@
@@ -1071,12 +1071,12 @@ index 0000000..65da527
 +        }
 +        if let available = answer.available {
 +            if let granted = answer.granted, granted > 0 {
-+                return String(localized: "\(money(available)) left of \(money(granted))")
++                return String(format: String(localized: "%1$@ left of %2$@"), money(available), money(granted))
 +            }
-+            return String(localized: "\(money(available)) left")
++            return String(format: String(localized: "%1$@ left"), money(available))
 +        }
 +        if let used = answer.used {
-+            return String(localized: "\(money(used)) used")
++            return String(format: String(localized: "%1$@ used"), money(used))
 +        }
 +        return String(localized: "No balance reported")
 +    }
@@ -1617,7 +1617,7 @@ index 5598679..f8f6e0d 100644
          if case .version = dataSource.value(at: indexPath)?.row {
              return false
 diff --git a/Apelin/Resources/Localizable.xcstrings b/Apelin/Resources/Localizable.xcstrings
-index c178c13..4d42eb0 100644
+index c178c13..61bab58 100644
 --- a/Apelin/Resources/Localizable.xcstrings
 +++ b/Apelin/Resources/Localizable.xcstrings
 @@ -78884,6 +78884,3166 @@
@@ -4370,255 +4370,6 @@ index c178c13..4d42eb0 100644
 +        }
 +      }
 +    },
-+    "%@ left of %@" : {
-+      "extractionState" : "manual",
-+      "localizations" : {
-+        "en" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ left of %2$@"
-+          }
-+        },
-+        "ar" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ متبقٍّ من %2$@"
-+          }
-+        },
-+        "de" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ von %2$@ übrig"
-+          }
-+        },
-+        "es" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ disponibles de %2$@"
-+          }
-+        },
-+        "fr" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ restants sur %2$@"
-+          }
-+        },
-+        "it" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ rimasti su %2$@"
-+          }
-+        },
-+        "ja" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%2$@ のうち残り %1$@"
-+          }
-+        },
-+        "ko" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%2$@ 중 %1$@ 남음"
-+          }
-+        },
-+        "pt-BR" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ restantes de %2$@"
-+          }
-+        },
-+        "ru" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "Осталось %1$@ из %2$@"
-+          }
-+        },
-+        "vi" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "Còn %1$@ trong %2$@"
-+          }
-+        },
-+        "zh-Hans" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "剩余 %1$@，共 %2$@"
-+          }
-+        },
-+        "zh-Hant" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "剩餘 %1$@，共 %2$@"
-+          }
-+        }
-+      }
-+    },
-+    "%@ left" : {
-+      "extractionState" : "manual",
-+      "localizations" : {
-+        "en" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ left"
-+          }
-+        },
-+        "ar" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ متبقٍّ"
-+          }
-+        },
-+        "de" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ übrig"
-+          }
-+        },
-+        "es" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ disponibles"
-+          }
-+        },
-+        "fr" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ restants"
-+          }
-+        },
-+        "it" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ rimasti"
-+          }
-+        },
-+        "ja" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "残り %1$@"
-+          }
-+        },
-+        "ko" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ 남음"
-+          }
-+        },
-+        "pt-BR" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ restantes"
-+          }
-+        },
-+        "ru" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "Осталось %1$@"
-+          }
-+        },
-+        "vi" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "Còn %1$@"
-+          }
-+        },
-+        "zh-Hans" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "剩余 %1$@"
-+          }
-+        },
-+        "zh-Hant" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "剩餘 %1$@"
-+          }
-+        }
-+      }
-+    },
-+    "%@ used" : {
-+      "extractionState" : "manual",
-+      "localizations" : {
-+        "en" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ used"
-+          }
-+        },
-+        "ar" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ مستخدَم"
-+          }
-+        },
-+        "de" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ verbraucht"
-+          }
-+        },
-+        "es" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ usados"
-+          }
-+        },
-+        "fr" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ utilisés"
-+          }
-+        },
-+        "it" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ usati"
-+          }
-+        },
-+        "ja" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ 使用済み"
-+          }
-+        },
-+        "ko" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ 사용됨"
-+          }
-+        },
-+        "pt-BR" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "%1$@ usados"
-+          }
-+        },
-+        "ru" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "Израсходовано %1$@"
-+          }
-+        },
-+        "vi" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "Đã dùng %1$@"
-+          }
-+        },
-+        "zh-Hans" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "已用 %1$@"
-+          }
-+        },
-+        "zh-Hant" : {
-+          "stringUnit" : {
-+            "state" : "translated",
-+            "value" : "已用 %1$@"
-+          }
-+        }
-+      }
-+    },
 +    "No balance reported" : {
 +      "extractionState" : "manual",
 +      "localizations" : {
@@ -4781,6 +4532,255 @@ index c178c13..4d42eb0 100644
 +          "stringUnit" : {
 +            "state" : "translated",
 +            "value" : "站點為這個端點的密鑰報告的剩餘額度。密鑰從保存位置讀取，只傳送給該站點。"
++          }
++        }
++      }
++    },
++    "%1$@ left of %2$@" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ left of %2$@"
++          }
++        },
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ متبقٍّ من %2$@"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ von %2$@ übrig"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ disponibles de %2$@"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ restants sur %2$@"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ rimasti su %2$@"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%2$@ のうち残り %1$@"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%2$@ 중 %1$@ 남음"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ restantes de %2$@"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Осталось %1$@ из %2$@"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Còn %1$@ trong %2$@"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "剩余 %1$@，共 %2$@"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "剩餘 %1$@，共 %2$@"
++          }
++        }
++      }
++    },
++    "%1$@ left" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ left"
++          }
++        },
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ متبقٍّ"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ übrig"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ disponibles"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ restants"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ rimasti"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "残り %1$@"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ 남음"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ restantes"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Осталось %1$@"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Còn %1$@"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "剩余 %1$@"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "剩餘 %1$@"
++          }
++        }
++      }
++    },
++    "%1$@ used" : {
++      "extractionState" : "manual",
++      "localizations" : {
++        "en" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ used"
++          }
++        },
++        "ar" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ مستخدَم"
++          }
++        },
++        "de" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ verbraucht"
++          }
++        },
++        "es" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ usados"
++          }
++        },
++        "fr" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ utilisés"
++          }
++        },
++        "it" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ usati"
++          }
++        },
++        "ja" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ 使用済み"
++          }
++        },
++        "ko" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ 사용됨"
++          }
++        },
++        "pt-BR" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "%1$@ usados"
++          }
++        },
++        "ru" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Израсходовано %1$@"
++          }
++        },
++        "vi" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "Đã dùng %1$@"
++          }
++        },
++        "zh-Hans" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "已用 %1$@"
++          }
++        },
++        "zh-Hant" : {
++          "stringUnit" : {
++            "state" : "translated",
++            "value" : "已用 %1$@"
 +          }
 +        }
 +      }
