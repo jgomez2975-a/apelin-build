@@ -5083,10 +5083,10 @@ index 42e168d..3789614 100644
          let usesAPIKey = ProviderModels.usesAPIKey(request.provider, credentials: credentials)
 diff --git a/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointBalance.swift b/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointBalance.swift
 new file mode 100644
-index 0000000..777596d
+index 0000000..89710ff
 --- /dev/null
 +++ b/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointBalance.swift
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,268 @@
 +import ApelinAgent
 +import ApelinCore
 +import ApelinProtocol
@@ -5099,9 +5099,11 @@ index 0000000..777596d
 +/// of them run — put a dollar ceiling in `hard_limit_usd` and count usage
 +/// in cents against it. OpenAI's own keys put three dollar figures in
 +/// `credit_grants`. A site that only reports what was spent answers the
-+/// usage route and nothing more. Each is asked in turn, at both spellings
-+/// of the address a reader may have saved, and the first answer with a
-+/// number in it is the one shown.
++/// usage route and nothing more. TokenRouter and the sites built on it
++/// answer one route, `usage`, with a `billing` object naming whether the
++/// money is a wallet balance or a subscription's remaining grant. Each is
++/// asked in turn, at both spellings of the address a reader may have
++/// saved, and the first answer with a number in it is the one shown.
 +///
 +/// The key goes in the `Authorization` header of a request the site
 +/// answers. It is never part of an error, a reply or a log line.
@@ -5116,7 +5118,7 @@ index 0000000..777596d
 +        let session = URLSession(configuration: .ephemeral)
 +        defer { session.finishTasksAndInvalidate() }
 +        let probes: [(URL, String, URLSession) async throws -> AgentEndpointBalanceResponse?] = [
-+            billing, credits, usage,
++            wallet, billing, credits, usage,
 +        ]
 +        var reached = false
 +        var lastFailure: Error?
@@ -5154,7 +5156,50 @@ index 0000000..777596d
 +        return list
 +    }
 +
-+    // MARK: - The three shapes
++    // MARK: - The four shapes
++
++    /// TokenRouter — the panel behind a good many relays with their own
++    /// name on them — answers `/usage` under the key and says in a
++    /// `billing` object whether what is left is a wallet balance or a
++    /// subscription's grant. Nothing else answers this route with that
++    /// object, so a site replying some other way here falls through to
++    /// the shapes below.
++    ///
++    /// A lifetime key quota, when the key has one, sits in `quota` and is
++    /// the tighter of the two ceilings; the grant it leaves is shown with
++    /// its limit, the way a ceiling is shown everywhere else.
++    private static func wallet(
++        _ root: URL,
++        _ key: String,
++        _ session: URLSession,
++    ) async throws -> AgentEndpointBalanceResponse? {
++        guard let url = URL(string: root.absoluteString + "/usage") else { return nil }
++        let (status, body) = try await get(url, key: key, session: session)
++        guard status == 200, let object = object(body),
++              let billing = object["billing"] as? [String: Any],
++              let source = billing["source"] as? String, source == "balance" || source == "subscription"
++        else { return nil }
++        var remaining = number(object["remaining"]) ?? number(object["balance"])
++        var ceiling: Double?
++        if let quota = object["quota"] as? [String: Any] {
++            remaining = number(quota["remaining"]) ?? remaining
++            ceiling = positive(quota["limit"])
++        }
++        if remaining == nil {
++            remaining = number(billing["remaining"]) ?? number(billing["balance"])
++        }
++        // A grant with no positive limit is answered as -1: no figure to show.
++        guard let left = remaining, left >= 0 else { return nil }
++        var money = billing["unit"]
++        if let named = object["unit"] { money = named }
++        return AgentEndpointBalanceResponse(
++            available: left,
++            used: nil,
++            granted: ceiling,
++            currency: unit(money),
++            source: source,
++        )
++    }
 +
 +    /// one-api, new-api and everything that follows them: a dollar ceiling
 +    /// and a cent count, so what is left is the first minus the second.
@@ -5294,6 +5339,20 @@ index 0000000..777596d
 +    private static func currency(_ object: [String: Any]) -> String {
 +        guard let text = object["currency"] as? String, !text.isEmpty, text.count <= 8 else { return "USD" }
 +        return text.uppercased()
++    }
++
++    /// The same question asked with a `unit` field, which is either a sign
++    /// or the money's name. A name this build has a symbol for is mapped
++    /// to its code; anything else short enough to read is kept as it is.
++    private static func unit(_ value: Any?) -> String {
++        guard let text = (value as? String)?.trimmingCharacters(in: .whitespaces), !text.isEmpty
++        else { return "USD" }
++        switch text.uppercased() {
++        case "$", "US$", "USD", "DOLLAR", "DOLLARS": return "USD"
++        case "¥", "￥", "CNY", "RMB", "元": return "CNY"
++        case "€", "EUR": return "EUR"
++        default: return text.count <= 8 ? text.uppercased() : "USD"
++        }
 +    }
 +}
 diff --git a/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointStore.swift b/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointStore.swift
