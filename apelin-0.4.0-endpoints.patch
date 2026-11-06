@@ -665,10 +665,10 @@ index dd8ceed..464b995 100644
          }
 diff --git a/Apelin/Interface/Settings/Accounts/EndpointFormController.swift b/Apelin/Interface/Settings/Accounts/EndpointFormController.swift
 new file mode 100644
-index 0000000..951889a
+index 0000000..2d9c21a
 --- /dev/null
 +++ b/Apelin/Interface/Settings/Accounts/EndpointFormController.swift
-@@ -0,0 +1,499 @@
+@@ -0,0 +1,502 @@
 +import ApelinProtocol
 +import UIKit
 +
@@ -1045,6 +1045,9 @@ index 0000000..951889a
 +        case let .failed(reason):
 +            content.text = String(localized: "Check Balance")
 +            content.textProperties.color = .tintColor
++            // What the site said runs to several lines, one per route
++            // asked; squeezing it onto one hides which route failed.
++            content.secondaryTextProperties.numberOfLines = 0
 +            content.secondaryText = reason
 +            balanceCell.accessibilityTraits = .button
 +        }
@@ -5083,10 +5086,10 @@ index 42e168d..3789614 100644
          let usesAPIKey = ProviderModels.usesAPIKey(request.provider, credentials: credentials)
 diff --git a/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointBalance.swift b/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointBalance.swift
 new file mode 100644
-index 0000000..89710ff
+index 0000000..73850aa
 --- /dev/null
 +++ b/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointBalance.swift
-@@ -0,0 +1,268 @@
+@@ -0,0 +1,352 @@
 +import ApelinAgent
 +import ApelinCore
 +import ApelinProtocol
@@ -5095,19 +5098,32 @@ index 0000000..89710ff
 +
 +/// What a saved OpenAI-compatible endpoint says is left on its key.
 +///
-+/// No two relays agree on how to say it. One-api and new-api — what most
-+/// of them run — put a dollar ceiling in `hard_limit_usd` and count usage
-+/// in cents against it. OpenAI's own keys put three dollar figures in
-+/// `credit_grants`. A site that only reports what was spent answers the
-+/// usage route and nothing more. TokenRouter and the sites built on it
-+/// answer one route, `usage`, with a `billing` object naming whether the
-+/// money is a wallet balance or a subscription's remaining grant. Each is
-+/// asked in turn, at both spellings of the address a reader may have
-+/// saved, and the first answer with a number in it is the one shown.
++/// No two relays agree on how to say it. TokenRouter and the sites built on
++/// it answer one route, `usage`, with a `billing` object naming whether the
++/// money is a wallet balance or a subscription's remaining grant. One-api and
++/// new-api — what most of them run — put a dollar ceiling in
++/// `hard_limit_usd` and count usage in cents against it. OpenAI's own keys
++/// put three dollar figures in `credit_grants`. A site that only reports what
++/// was spent answers the usage route and nothing more. Each is asked in turn,
++/// at both spellings of the address a reader may have saved, and the first
++/// answer with a number in it is the one shown.
++///
++/// When none of them answers with a figure, the refusal repeats what each
++/// route said. A flat "no balance" hides the difference between a key the
++/// site turned down, a route that is not there, and a reply this build does
++/// not recognise — and those three need different fixes.
 +///
 +/// The key goes in the `Authorization` header of a request the site
 +/// answers. It is never part of an error, a reply or a log line.
 +enum EndpointBalance {
++    /// What one route heard back. `miss` keeps the site's own words so a
++    /// refusal can say which route answered what.
++    private enum Answer {
++        case figure(AgentEndpointBalanceResponse)
++        case miss(route: String, status: Int, body: Data)
++        case absent
++    }
++
 +    static func fetch(credentials: OAuthCredentials) async throws -> AgentEndpointBalanceResponse {
 +        guard let saved = EndpointStore.string(AgentSignInField.baseURL.rawValue, in: credentials),
 +              let base = URL(string: saved), base.host?.isEmpty == false
@@ -5117,29 +5133,40 @@ index 0000000..89710ff
 +
 +        let session = URLSession(configuration: .ephemeral)
 +        defer { session.finishTasksAndInvalidate() }
-+        let probes: [(URL, String, URLSession) async throws -> AgentEndpointBalanceResponse?] = [
++        let probes: [(URL, String, URLSession) async throws -> Answer] = [
 +            wallet, billing, credits, usage,
 +        ]
-+        var reached = false
++        var asked: [String] = []
++        var refused = 0
 +        var lastFailure: Error?
 +        for root in roots(base) {
 +            for probe in probes {
 +                do {
-+                    if let answer = try await probe(root, key, session) {
++                    switch try await probe(root, key, session) {
++                    case let .figure(answer):
 +                        return answer
++                    case let .miss(route, status, body):
++                        asked.append("\(route) → \(status) \(excerpt(body))")
++                        if status == 401 || status == 403 { refused += 1 }
++                    case .absent:
++                        continue
 +                    }
-+                    // A 200 that says nothing is still an answer: the site
-+                    // is there, it just does not report this.
-+                    reached = true
 +                } catch {
 +                    lastFailure = error
++                    asked.append("\(root.path.isEmpty ? "/" : root.path) → \(short(error))")
 +                }
 +            }
 +        }
-+        if !reached, let lastFailure {
++        let report = asked.prefix(8).joined(separator: "\n")
++        // Every route said the same thing about the key: the key is the
++        // problem, not the routes.
++        if refused > 0, refused == asked.count {
++            throw ApelinError(.denied, "The site refused the saved key.\n\(report)")
++        }
++        if asked.isEmpty, let lastFailure {
 +            throw ApelinError(.unavailable, "The site could not be asked: \(lastFailure.localizedDescription)")
 +        }
-+        throw ApelinError(.notFound, "This site does not report a balance.")
++        throw ApelinError(.notFound, "No balance was reported.\n\(report)")
 +    }
 +
 +    /// The address, and the same address with `/v1` put on when it was
@@ -5156,10 +5183,17 @@ index 0000000..89710ff
 +        return list
 +    }
 +
++    /// The route as a reader would see it in a log: what was saved, and the
++    /// tail that was asked of it.
++    private static func route(_ root: URL, _ tail: String) -> String {
++        let head = root.path
++        return (head.isEmpty ? "" : head) + tail
++    }
++
 +    // MARK: - The four shapes
 +
 +    /// TokenRouter — the panel behind a good many relays with their own
-+    /// name on them — answers `/usage` under the key and says in a
++    /// name on them — answers `usage` under the key and says in a
 +    /// `billing` object whether what is left is a wallet balance or a
 +    /// subscription's grant. Nothing else answers this route with that
 +    /// object, so a site replying some other way here falls through to
@@ -5172,33 +5206,48 @@ index 0000000..89710ff
 +        _ root: URL,
 +        _ key: String,
 +        _ session: URLSession,
-+    ) async throws -> AgentEndpointBalanceResponse? {
-+        guard let url = URL(string: root.absoluteString + "/usage") else { return nil }
++    ) async throws -> Answer {
++        let tail = "/usage"
++        guard let url = URL(string: root.absoluteString + tail) else { return .absent }
 +        let (status, body) = try await get(url, key: key, session: session)
-+        guard status == 200, let object = object(body),
-+              let billing = object["billing"] as? [String: Any],
-+              let source = billing["source"] as? String, source == "balance" || source == "subscription"
-+        else { return nil }
-+        var remaining = number(object["remaining"]) ?? number(object["balance"])
-+        var ceiling: Double?
-+        if let quota = object["quota"] as? [String: Any] {
-+            remaining = number(quota["remaining"]) ?? remaining
-+            ceiling = positive(quota["limit"])
++        guard status == 200, let object = object(body) else {
++            return .miss(route: route(root, tail), status: status, body: body)
 +        }
-+        if remaining == nil {
-+            remaining = number(billing["remaining"]) ?? number(billing["balance"])
++        let billing = object["billing"] as? [String: Any]
++        // The `billing` object is the mark of this shape. A source whose
++        // name this build does not know is still this shape; the numbers
++        // decide, not the label.
++        let shaped = billing != nil
++            || (object["mode"] is String && number(object["remaining"]) != nil)
++            || number(object["remaining"]) != nil
++        guard shaped else {
++            return .miss(route: route(root, tail), status: status, body: body)
 +        }
-+        // A grant with no positive limit is answered as -1: no figure to show.
-+        guard let left = remaining, left >= 0 else { return nil }
-+        var money = billing["unit"]
++
++        let quota = object["quota"] as? [String: Any]
++        var ceiling = positive(quota?["limit"])
++        if ceiling == nil { ceiling = positive(billing?["limit"]) }
++        var remaining = number(quota?["remaining"])
++        if remaining == nil { remaining = number(object["remaining"]) }
++        if remaining == nil { remaining = number(object["balance"]) }
++        if remaining == nil { remaining = number(billing?["remaining"]) }
++        if remaining == nil { remaining = number(billing?["balance"]) }
++        // A grant with no figure of its own is answered as -1. That is a
++        // sentinel, not a debt, so it falls through to the next shape.
++        guard let left = remaining, left >= 0 else {
++            return .miss(route: route(root, tail), status: status, body: body)
++        }
++        var money = billing?["unit"]
 +        if let named = object["unit"] { money = named }
-+        return AgentEndpointBalanceResponse(
++        if let named = quota?["unit"] { money = named }
++        let named = (billing?["source"] as? String) ?? "usage"
++        return .figure(AgentEndpointBalanceResponse(
 +            available: left,
-+            used: nil,
++            used: number(quota?["used"]),
 +            granted: ceiling,
 +            currency: unit(money),
-+            source: source,
-+        )
++            source: String(named.prefix(24)),
++        ))
 +    }
 +
 +    /// one-api, new-api and everything that follows them: a dollar ceiling
@@ -5207,32 +5256,37 @@ index 0000000..89710ff
 +        _ root: URL,
 +        _ key: String,
 +        _ session: URLSession,
-+    ) async throws -> AgentEndpointBalanceResponse? {
-+        guard let url = URL(string: root.absoluteString + "/dashboard/billing/subscription") else { return nil }
++    ) async throws -> Answer {
++        let tail = "/dashboard/billing/subscription"
++        guard let url = URL(string: root.absoluteString + tail) else { return .absent }
 +        let (status, body) = try await get(url, key: key, session: session)
-+        guard status == 200, let object = object(body) else { return nil }
++        guard status == 200, let object = object(body) else {
++            return .miss(route: route(root, tail), status: status, body: body)
++        }
 +        let ceiling = positive(object["hard_limit_usd"])
 +            ?? positive(object["system_hard_limit_usd"])
 +            ?? positive(object["soft_limit_usd"])
 +        // A relay that answers the same question in its own words.
 +        if let available = number(object["total_available"]) {
-+            return AgentEndpointBalanceResponse(
++            return .figure(AgentEndpointBalanceResponse(
 +                available: available,
 +                used: number(object["total_used"]),
 +                granted: ceiling,
 +                currency: currency(object),
 +                source: "billing",
-+            )
++            ))
 +        }
-+        guard let ceiling else { return nil }
-+        let used = try await spent(root, key, session)
-+        return AgentEndpointBalanceResponse(
-+            available: max(0, ceiling - (used ?? 0)),
-+            used: used,
++        guard let ceiling else {
++            return .miss(route: route(root, tail), status: status, body: body)
++        }
++        let spentAnswer = try await spent(root, key, session)
++        return .figure(AgentEndpointBalanceResponse(
++            available: max(0, ceiling - (spentAnswer.cents ?? 0)),
++            used: spentAnswer.cents,
 +            granted: ceiling,
 +            currency: currency(object),
 +            source: "billing",
-+        )
++        ))
 +    }
 +
 +    /// OpenAI's own keys: three dollar figures, no arithmetic needed.
@@ -5240,21 +5294,26 @@ index 0000000..89710ff
 +        _ root: URL,
 +        _ key: String,
 +        _ session: URLSession,
-+    ) async throws -> AgentEndpointBalanceResponse? {
-+        guard let url = URL(string: root.absoluteString + "/dashboard/billing/credit_grants") else { return nil }
++    ) async throws -> Answer {
++        let tail = "/dashboard/billing/credit_grants"
++        guard let url = URL(string: root.absoluteString + tail) else { return .absent }
 +        let (status, body) = try await get(url, key: key, session: session)
-+        guard status == 200, let object = object(body) else { return nil }
++        guard status == 200, let object = object(body) else {
++            return .miss(route: route(root, tail), status: status, body: body)
++        }
 +        let available = number(object["total_available"])
 +        let used = number(object["total_used"])
 +        let granted = number(object["total_granted"])
-+        guard available != nil || used != nil || granted != nil else { return nil }
-+        return AgentEndpointBalanceResponse(
++        guard available != nil || used != nil || granted != nil else {
++            return .miss(route: route(root, tail), status: status, body: body)
++        }
++        return .figure(AgentEndpointBalanceResponse(
 +            available: available,
 +            used: used,
 +            granted: granted,
 +            currency: currency(object),
 +            source: "credits",
-+        )
++        ))
 +    }
 +
 +    /// A site that names no ceiling but does say what was spent. What is
@@ -5263,21 +5322,39 @@ index 0000000..89710ff
 +        _ root: URL,
 +        _ key: String,
 +        _ session: URLSession,
-+    ) async throws -> AgentEndpointBalanceResponse? {
-+        guard let used = try await spent(root, key, session) else { return nil }
-+        return AgentEndpointBalanceResponse(available: nil, used: used, granted: nil, currency: "USD", source: "usage")
++    ) async throws -> Answer {
++        let spentAnswer = try await spent(root, key, session)
++        guard let used = spentAnswer.cents else {
++            return .miss(route: spentAnswer.route, status: spentAnswer.status, body: spentAnswer.body)
++        }
++        return .figure(AgentEndpointBalanceResponse(
++            available: nil,
++            used: used,
++            granted: nil,
++            currency: "USD",
++            source: "usage",
++        ))
 +    }
 +
 +    /// Usage as the site counts it, in dollars. one-api and new-api count
 +    /// cents; a site that already answers dollars is caught by its own
 +    /// subscription reply, above, and never reaches this.
-+    private static func spent(_ root: URL, _ key: String, _ session: URLSession) async throws -> Double? {
++    private static func spent(
++        _ root: URL,
++        _ key: String,
++        _ session: URLSession,
++    ) async throws -> (cents: Double?, route: String, status: Int, body: Data) {
 +        let (start, end) = window()
-+        guard let url = URL(string: root.absoluteString + "/dashboard/billing/usage?start_date=\(start)&end_date=\(end)")
-+        else { return nil }
++        let tail = "/dashboard/billing/usage?start_date=\(start)&end_date=\(end)"
++        let named = route(root, tail)
++        guard let url = URL(string: root.absoluteString + tail) else {
++            return (nil, named, 0, Data())
++        }
 +        let (status, body) = try await get(url, key: key, session: session)
-+        guard status == 200, let object = object(body), let cents = number(object["total_usage"]) else { return nil }
-+        return cents / 100
++        guard status == 200, let object = object(body), let cents = number(object["total_usage"]) else {
++            return (nil, named, status, body)
++        }
++        return (cents / 100, named, status, body)
 +    }
 +
 +    // MARK: - The wire
@@ -5294,12 +5371,22 @@ index 0000000..89710ff
 +        request.setValue("application/json", forHTTPHeaderField: "Accept")
 +        let (data, response) = try await session.data(for: request)
 +        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-+        // A site that will not take the key says so once, here, rather than
-+        // leaving the caller to read "no balance" out of three 401s.
-+        if status == 401 || status == 403 {
-+            throw ApelinError(.denied, "The site refused the saved key.")
-+        }
 +        return (status, data)
++    }
++
++    /// The site's own words, short enough for one line of a settings row.
++    private static func excerpt(_ data: Data) -> String {
++        let text = String(decoding: data.prefix(240), as: UTF8.self)
++            .replacingOccurrences(of: "\n", with: " ")
++            .trimmingCharacters(in: .whitespacesAndNewlines)
++        return text.isEmpty ? "(no body)" : text
++    }
++
++    private static func short(_ error: Error) -> String {
++        if let error = error as? ApelinError, !error.message.isEmpty {
++            return String(error.message.prefix(160))
++        }
++        return String(error.localizedDescription.prefix(160))
 +    }
 +
 +    /// The window one-api bills over: the first of January to today, both
