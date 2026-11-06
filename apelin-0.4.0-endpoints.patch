@@ -5083,10 +5083,10 @@ index 42e168d..3789614 100644
          let usesAPIKey = ProviderModels.usesAPIKey(request.provider, credentials: credentials)
 diff --git a/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointBalance.swift b/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointBalance.swift
 new file mode 100644
-index 0000000..e6f17ce
+index 0000000..777596d
 --- /dev/null
 +++ b/Packages/ApelinAgent/Sources/ApelinAgentWorker/SignIn/EndpointBalance.swift
-@@ -0,0 +1,202 @@
+@@ -0,0 +1,209 @@
 +import ApelinAgent
 +import ApelinCore
 +import ApelinProtocol
@@ -5142,11 +5142,12 @@ index 0000000..e6f17ce
 +
 +    /// The address, and the same address with `/v1` put on when it was
 +    /// saved without one — an endpoint is saved either way, and every
-+    /// billing route below sits under `/v1`.
++    /// billing route below sits under `/v1`. A trailing slash goes first,
++    /// so a route is never asked at a doubled one.
 +    private static func roots(_ base: URL) -> [URL] {
 +        var text = base.absoluteString
 +        while text.hasSuffix("/") { text.removeLast() }
-+        var list = [base]
++        var list = [URL(string: text) ?? base]
 +        if !text.hasSuffix("/v1"), let prefixed = URL(string: text + "/v1") {
 +            list.append(prefixed)
 +        }
@@ -5247,7 +5248,13 @@ index 0000000..e6f17ce
 +        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
 +        request.setValue("application/json", forHTTPHeaderField: "Accept")
 +        let (data, response) = try await session.data(for: request)
-+        return ((response as? HTTPURLResponse)?.statusCode ?? 0, data)
++        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
++        // A site that will not take the key says so once, here, rather than
++        // leaving the caller to read "no balance" out of three 401s.
++        if status == 401 || status == 403 {
++            throw ApelinError(.denied, "The site refused the saved key.")
++        }
++        return (status, data)
 +    }
 +
 +    /// The window one-api bills over: the first of January to today, both
